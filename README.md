@@ -6,7 +6,7 @@ Binaural(양귀) 오디오 + 장치 방향(yaw) 정보만으로 ERP(equirectangu
 
 ## 결과 (Matterport3D test 3600, MAE는 m 단위, 낮을수록 좋음)
 
-| 입력 채널 | BatVision (54.5M) | OAA (11.0M) |
+| 입력 채널 | BatVision (54.5M) | OAA (ours, 11.0M) |
 |---|---|---|
 | 2ch (0° 양귀) | 0.920 | 0.919 |
 | 4ch (cB) | 0.852 | 0.783 |
