@@ -24,6 +24,7 @@ from torch.utils.data import Dataset, DataLoader
 
 RAD = "/root/implicit_full_cache/ic2_256x512_nolog"                                  # 0° spec + depth/mask
 REAL90 = "/root/storage/implementation/shared_audio/test_for_audio_tof/cache/real_rot"  # 90/180/270° specs
+RXWAVE = "/root/storage/implementation/shared_audio/test_for_audio_tof/cache/rx_wave"   # raw 0° binaural waveform (N,2,3200)@48k
 
 MODES = ("r2", "cB", "r6", "r8")
 IN_CH = {"r2": 2, "cB": 4, "r6": 6, "r8": 8}
@@ -61,4 +62,27 @@ class RotSet(Dataset):
 
 def loader(split, batch_size, shuffle, num_workers, mode):
     return DataLoader(RotSet(split, mode), batch_size=batch_size, shuffle=shuffle,
+                      num_workers=num_workers, drop_last=shuffle, pin_memory=True)
+
+
+class WaveSet(Dataset):
+    """Raw 0deg binaural waveform (N,2,3200)@48k + aligned RAD depth/mask, for the EchoScan
+    baseline (and EchoDiffusion's waveform branch). rx_wave rows are index-aligned with RAD
+    (both keyed off the same NOLOG2 split key list)."""
+
+    def __init__(self, split):
+        self.w = np.load(f"{RXWAVE}/{split}_spec.npy", mmap_mode="r")   # (N,2,3200) float16
+        self.d = np.load(f"{RAD}/{split}_depth.npy", mmap_mode="r")
+        self.m = np.load(f"{RAD}/{split}_mask.npy", mmap_mode="r")
+
+    def __len__(self):
+        return len(self.d)
+
+    def __getitem__(self, i):
+        t = lambda a: torch.from_numpy(np.array(a[i], dtype=np.float32))
+        return {"wave": t(self.w), "depth": t(self.d), "mask": t(self.m)}
+
+
+def wave_loader(split, batch_size, shuffle, num_workers):
+    return DataLoader(WaveSet(split), batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, drop_last=shuffle, pin_memory=True)

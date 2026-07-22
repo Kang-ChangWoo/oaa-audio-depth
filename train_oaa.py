@@ -10,12 +10,13 @@ Recipe (decisive parts):
 
 Run:  python3 train_oaa.py --run-name r8_s0 --nviews 8
 """
-import os, json, math, time, argparse, copy
+import os, json, math, time, argparse, copy, importlib
 import numpy as np
 import torch
 
-from data import loader
-from oaa import OAAv2Depth
+# data module selectable at runtime: DATA_MODULE=data (MP3D, default) | data_0422 (Replica)
+loader = importlib.import_module(os.environ.get("DATA_MODULE", "data")).loader
+from model.oaa import OAAv2Depth
 
 
 def cos_lat(h, device):
@@ -42,6 +43,13 @@ def main():
     p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
     p.add_argument("--cond-mode", default="adaln", choices=["add", "adaln"])
     p.add_argument("--dim", type=int, default=256)
+    # OURS full-resolution decoder-upgrade variant (model/oaa_fullres.py). RESULTS.md: fullres gives
+    # a real gain under the champion recipe (adaln + lr5e-4 + bs16). --dec-deep/--multi-scale-lift
+    # are the decoder-upgrade knobs; --full-res-enc feeds the encoder at native 256x512.
+    p.add_argument("--full-res", action="store_true")
+    p.add_argument("--full-res-enc", action="store_true")
+    p.add_argument("--dec-deep", action="store_true")
+    p.add_argument("--multi-scale-lift", action="store_true")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -59,7 +67,14 @@ def main():
     tr = loader("train", a.batch_size, True, a.num_workers, dmode)
     va = loader("val", 32, False, a.num_workers, dmode)
 
-    model = OAAv2Depth(C=a.dim, nviews=a.nviews, cond_mode=a.cond_mode, max_depth=a.max_depth).to(device)
+    if a.full_res:
+        from model.oaa_fullres import OAAv2Depth as OAAFullRes
+        model = OAAFullRes(C=a.dim, nviews=a.nviews, in_ch=1, cond_mode=a.cond_mode,
+                           enc_res=((256, 512) if a.full_res_enc else (128, 256)),
+                           dec_deep=a.dec_deep, multi_scale_lift=a.multi_scale_lift,
+                           max_depth=a.max_depth).to(device)
+    else:
+        model = OAAv2Depth(C=a.dim, nviews=a.nviews, cond_mode=a.cond_mode, max_depth=a.max_depth).to(device)
     print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M", flush=True)
 
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)

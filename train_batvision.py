@@ -3,12 +3,14 @@
 Recipe: masked L1, AdamW lr 2e-3 wd 1e-4, warmup 1 epoch + cosine, batch 32, 30 epochs, no EMA.
 Run:  python3 train_batvision.py --run-name bat_r8_s0 --mode r8
 """
-import os, json, math, time, argparse
+import os, json, math, time, argparse, importlib
 import numpy as np
 import torch
 
-from data import loader, IN_CH
-from batvision import RotDepth
+# data module selectable at runtime: DATA_MODULE=data (MP3D, default) | data_0422 (Replica)
+_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data"))
+loader, IN_CH = _DM.loader, _DM.IN_CH
+from model.batvision import RotDepth
 from train_oaa import cos_lat, quick_val
 
 
