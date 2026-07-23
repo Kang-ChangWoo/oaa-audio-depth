@@ -84,7 +84,7 @@ def free_gpus(busy):
     free = []
     for line in out.strip().splitlines():
         i, used = [x.strip() for x in line.split(",")]
-        if int(used) < MEM_FREE_MB and int(i) not in busy:
+        if int(used) < MEM_FREE_MB and int(i) not in busy and int(i) in {4, 5, 6, 7}:  # GPU 0-3 reserved for Replica OAA-SOTA
             free.append(int(i))
     return free
 

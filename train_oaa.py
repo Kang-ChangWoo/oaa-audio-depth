@@ -53,6 +53,8 @@ def main():
     p.add_argument("--multi-scale-lift", action="store_true")
     p.add_argument("--data-mode", default="")   # loader mode override (e.g. 'fb' front-back 4ch on Replica);
     #                                             default derived from nviews. Pose set auto from data module.
+    p.add_argument("--accum", type=int, default=1)   # grad-accumulation steps: effective batch = batch-size*accum
+    #   (reproduce the A6000 champion effective bs16 on a 24GB 3090, e.g. --batch-size 4 --accum 4)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -82,7 +84,9 @@ def main():
     print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M", flush=True)
 
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
-    total = a.epochs * len(tr); warm = max(1, int(a.warmup_ep * len(tr)))
+    accum = max(1, a.accum)
+    steps_per_ep = math.ceil(len(tr) / accum)        # optimizer steps (schedule counts these, not micro-batches)
+    total = a.epochs * steps_per_ep; warm = max(1, int(a.warmup_ep * steps_per_ep))
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: (s + 1) / warm if s < warm else 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, total - warm))))
     wlat = cos_lat(256, device).view(1, 1, 256, 1)
@@ -91,23 +95,26 @@ def main():
         q.requires_grad_(False)
 
     best = 1e9; hist = []
+    nbatch = len(tr)
     for ep in range(a.epochs):
         model.train(); t0 = time.time(); run = 0.0; nb = 0
-        for b in tr:
+        opt.zero_grad()
+        for i, b in enumerate(tr):
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 D = model(spec, view_poses=vp) if vp is not None else model(spec)
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)   # masked L1, nothing else
-            opt.zero_grad(); loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step(); sched.step()
-            with torch.no_grad():
-                for q, w in zip(ema.parameters(), model.parameters()):
-                    q.mul_(0.999).add_(w, alpha=0.001)
-                for q, w in zip(ema.buffers(), model.buffers()):
-                    q.copy_(w)
+            (loss / accum).backward()                                  # accumulate grads over `accum` micro-batches
             run += float(loss.detach()); nb += 1
+            if (i + 1) % accum == 0 or (i + 1) == nbatch:              # optimizer step per effective batch
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step(); sched.step(); opt.zero_grad()
+                with torch.no_grad():
+                    for q, w in zip(ema.parameters(), model.parameters()):
+                        q.mul_(0.999).add_(w, alpha=0.001)
+                    for q, w in zip(ema.buffers(), model.buffers()):
+                        q.copy_(w)
         run /= max(nb, 1)
         vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
         hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
