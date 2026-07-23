@@ -58,12 +58,61 @@ def eco_job(name, wave_mode):
     return name, argv, ECO_ENV, "comparison_mp3d"
 
 
-# (job_factory, ready_predicate) in priority order — eco FIRST (user 2026-07-23: MP3D
-# EchoDiffusion before the e40 twins)
+# ---- nearest-STFT baseline retraining round (user 2026-07-23: 선행 연구들도 nearest로) ----
+# All prior Replica baselines were trained on the old machine with bilinear STFT; retrain the
+# whole matrix at 40 epochs / 48GB batches under the corrected pipeline. New run names *_n keep
+# the bilinear round intact for reference.
+ECO_REP_ENV = {**ECO_ENV, "DATA_MODULE": "data_0422", "R0422_SPLIT": "off3"}
+BASE_BS = {"batvision": {"r2": 64, "fb": 64, "r6": 48, "r8": 48},
+           "resnet":    {"r2": 64, "fb": 64, "r6": 48, "r8": 48},
+           "echoscan":  {"r2": 64, "fb": 64, "r6": 48, "r8": 48},
+           "vit":       {"r2": 48, "fb": 48, "r6": 32, "r8": 32},
+           "beyond":    {"r2": 32, "fb": 32, "r6": 32, "r8": 32},
+           "eco":       {"r2": 16, "fb": 16, "r6": 12, "r8": 12}}
+_STEM = {"resnet": "rn", "vit": "vit", "echoscan": "es", "beyond": "byd",
+         "batvision": "bat", "eco": "eco"}
+
+
+def baseline_job(model, mode):
+    run = f"{_STEM[model]}_{mode}_fin"
+    b = str(BASE_BS[model][mode])
+    if model == "batvision":
+        argv = [PY, "-u", "train_batvision.py", "--run-name", run, "--mode", mode, "--epochs", "40",
+                "--batch-size", b, "--num-workers", "8", "--out-dir", "comparison"]
+        return run, argv, REP_ENV, "comparison"
+    if model == "eco":
+        argv = [ECO_PY, "-u", "train_echodiffusion.py", "--run-name", run, "--mode", mode,
+                "--wave-mode", "std", "--epochs", "40", "--batch-size", b,
+                "--num-workers", "8", "--out-dir", "comparison"]
+        return run, argv, ECO_REP_ENV, "comparison"
+    argv = [PY, "-u", "train_baseline.py", "--model", model, "--run-name", run, "--mode", mode,
+            "--epochs", "40", "--batch-size", b, "--num-workers", "8", "--out-dir", "comparison"]
+    return run, argv, REP_ENV, "comparison"
+
+
+# (job_factory, ready_predicate) in priority order
 JOBS = [(lambda n=n, w=w: eco_job(n, w), eco_ready)
         for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wlong", "long"), ("eco_r2_wnone", "none"))]
 JOBS += [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
-         for m in ("r2", "fb", "fs", "cb", "r6", "r8")]
+         for m in ("r2", "fb", "r6")]   # r8 replaced by the accum-2 fix (oaa_r8_e40a2) below
+JOBS += [(lambda m=m: e40_job(m), lambda: True) for m in ("fs", "cb")]   # bmax killed early -> run e40 directly
+JOBS += [(lambda mm=(model, mode): baseline_job(*mm), (eco_ready if model == "eco" else (lambda: True)))
+         for model in ("batvision", "eco", "echoscan", "vit", "resnet", "beyond")
+         for mode in ("r2",)]   # ch2 first (user); fb/r6/r8 rounds follow after review
+
+
+def r8a2_job():
+    # 8ch batch-parity fix (2026-07-23): bmax/e40 ran r8 at bs7 (fullres 8ch = 46.8GB memory
+    # wall) vs 14 at 4ch — the gradient-noise mismatch is the prime suspect for r8's val/test
+    # regression (0.2981/0.2640 vs r6 0.2707/0.2416). accum 2 -> effective batch 14, same memory.
+    argv = [PY, "-u", "train_oaa.py", "--run-name", "oaa_r8_e40a2", "--nviews", "8",
+            "--data-mode", "r8", "--cond-mode", "adaln", "--full-res", "--full-res-enc",
+            "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--epochs", "40",
+            "--batch-size", "7", "--accum", "2", "--num-workers", "8", "--out-dir", "comparison"]
+    return "oaa_r8_e40a2", argv, REP_ENV, "comparison"
+
+
+JOBS += [(r8a2_job, lambda: True)]
 
 
 def free_gpus(busy):
