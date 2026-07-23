@@ -36,7 +36,11 @@ def quick_val(model, va, device, max_depth, wlat):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", required=True)
-    p.add_argument("--mode", default="r2")   # data_0422 mode: r2/fb/r6/r8 -> spec in_ch 2/4/6/8
+    p.add_argument("--mode", default="r2")   # data mode: r2/fb/r6/r8 -> spec in_ch 2/4/6/8
+    # waveform-branch ablation (2026-07-23): std = original CIDE on the 10m-round-trip cut;
+    # long = CIDE on a longer raw cut (spec unchanged); none = CIDE removed (learned const token)
+    p.add_argument("--wave-mode", default="std", choices=["std", "long", "none"])
+    p.add_argument("--wave-window", type=int, default=48000)  # samples for --wave-mode long (1.0 s @48k)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup-ep", type=float, default=2.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -51,9 +55,10 @@ def main():
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
 
     in_ch = _DM.IN_CH[a.mode]
-    tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers, a.mode)
-    va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode)
-    model = EchoDiffusionDepth(in_ch=in_ch).to(device)
+    ww = {"wave_window": a.wave_window} if a.wave_mode == "long" else {}
+    tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers, a.mode, **ww)
+    va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode, **ww)
+    model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if a.wave_mode == "none" else "cide").to(device)
     cfg = dict(vars(a)); cfg["model"] = "echodiffusion"
     tot = sum(x.numel() for x in model.parameters()); trn = sum(x.numel() for x in model.parameters() if x.requires_grad)
     print(f"[cfg] {cfg}", flush=True)

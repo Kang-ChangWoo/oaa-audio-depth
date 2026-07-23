@@ -145,8 +145,10 @@ class EchoDiffusionEncoder(nn.Module):
       and we instantiate only the SD UNet (see _DiffusionWrapper docstring).
     """
 
-    def __init__(self, in_ch=2, out_dim=1024, ldm_prior=(32, 64, 256), emb_dim=768):
+    def __init__(self, in_ch=2, out_dim=1024, ldm_prior=(32, 64, 256), emb_dim=768,
+                 wave_mode="cide"):
         super().__init__()
+        self.wave_mode = wave_mode
 
         self.layer1 = nn.Sequential(
             nn.Conv2d(ldm_prior[0], ldm_prior[0], 3, stride=2, padding=1),
@@ -164,7 +166,13 @@ class EchoDiffusionEncoder(nn.Module):
         )
         self.apply(self._init_weights)
 
-        self.cide_module = CIDE(emb_dim)
+        if wave_mode == "none":
+            # waveform-branch ablation: CIDE replaced by a single learned context token,
+            # so the SD-UNet cross-attn still gets a (B,1,emb_dim) input of the same shape.
+            self.cide_module = None
+            self.const_ctx = nn.Parameter(torch.randn(1, 1, emb_dim) * 0.02)
+        else:
+            self.cide_module = CIDE(emb_dim)
 
         # spec -> latents branch (in_conv now honors in_ch, see ASPP_ASFF.py)
         self.aspp_asff = UNet_aspp_asff(in_channels=in_ch)
@@ -191,7 +199,10 @@ class EchoDiffusionEncoder(nn.Module):
         latents = self.aspp_asff(audio_spec)          # (B,128,h/4,w/4)
         latents = self.latent_adapter(latents)        # (B,512,h/4,w/4)
 
-        conditioning_scene_embedding = self.cide_module(audio_wave)
+        if self.cide_module is None:                  # wave_mode="none" ablation
+            conditioning_scene_embedding = self.const_ctx.expand(audio_spec.shape[0], -1, -1)
+        else:
+            conditioning_scene_embedding = self.cide_module(audio_wave)
 
         # Fixed timestep t=1: the SD UNet is a deterministic feature extractor.
         t = torch.ones((audio_spec.shape[0],), device=audio_spec.device).long()
@@ -278,7 +289,7 @@ class EchoDiffusionDepth(nn.Module):
         returns: (B, 1, 256, 512) depth in [0, 1]
     """
 
-    def __init__(self, in_ch=2):
+    def __init__(self, in_ch=2, wave_mode="cide"):
         super().__init__()
         self.in_ch = in_ch
 
@@ -286,7 +297,7 @@ class EchoDiffusionDepth(nn.Module):
         channels_in = embed_dim * 8   # 1536
         channels_out = embed_dim      # 192
 
-        self.encoder = EchoDiffusionEncoder(in_ch=in_ch, out_dim=channels_in)
+        self.encoder = EchoDiffusionEncoder(in_ch=in_ch, out_dim=channels_in, wave_mode=wave_mode)
         self.decoder = Decoder(channels_in, channels_out)
 
         self.last_layer_depth = nn.Sequential(

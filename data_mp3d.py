@@ -49,20 +49,20 @@ _HANN = torch.hann_window(WIN)
 def _stft_mag(wav2):
     s = torch.stft(wav2, n_fft=N_FFT, hop_length=HOP, win_length=WIN, window=_HANN,
                    center=True, return_complex=True).abs()
-    return F.interpolate(s.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False)[0]
+    return F.interpolate(s.unsqueeze(0), size=(H, W), mode="nearest")[0]   # nearest = MP3D cache recipe
 
 
-def _load_wave1(wpath):
+def _load_wave1(wpath, frames=WINDOW):
     import soundfile as sf
-    y, _ = sf.read(wpath, frames=WINDOW, dtype="float32", always_2d=True)
-    if y.shape[0] < WINDOW:
-        y = np.pad(y, ((0, WINDOW - y.shape[0]), (0, 0)))
+    y, _ = sf.read(wpath, frames=frames, dtype="float32", always_2d=True)
+    if y.shape[0] < frames:
+        y = np.pad(y, ((0, frames - y.shape[0]), (0, 0)))
     return torch.from_numpy(y.T.copy())
 
 
-def _load_wave(scene, front, mode):
+def _load_wave(scene, front, mode, frames=WINDOW):
     steps = _group_steps(front, _OFFS[mode])
-    return torch.cat([_load_wave1(f"{ROOT}/{scene}/audio_wav/audio_{s:03d}.wav") for s in steps], 0)
+    return torch.cat([_load_wave1(f"{ROOT}/{scene}/audio_wav/audio_{s:03d}.wav", frames) for s in steps], 0)
 
 
 def _load_depth(scene, front):
@@ -101,11 +101,19 @@ class WaveSet(_Base):
 
 
 class SpecWaveSet(_Base):
+    """spec is ALWAYS built from the standard WINDOW cut (spec recipe untouched); wave_window
+    only lengthens the raw waveform handed to the model's wave branch (EchoDiffusion CIDE)."""
+
+    def __init__(self, split, mode="r2", wave_window=None):
+        super().__init__(split, mode)
+        self.wave_window = wave_window or WINDOW
+
     def __getitem__(self, i):
         sc, f = self.samples[i]
-        wave = _load_wave(sc, f, self.mode)
+        wave_std = _load_wave(sc, f, self.mode)
+        wave = wave_std if self.wave_window == WINDOW else _load_wave(sc, f, self.mode, self.wave_window)
         depth, mask = _load_depth(sc, f)
-        return {"spec": _stft_mag(wave), "wave": wave, "depth": depth, "mask": mask}
+        return {"spec": _stft_mag(wave_std), "wave": wave, "depth": depth, "mask": mask}
 
 
 def loader(split, batch_size, shuffle, num_workers, mode="r2", *_a, **_k):
@@ -118,6 +126,6 @@ def wave_loader(split, batch_size, shuffle, num_workers, mode="r2"):
                       num_workers=num_workers, drop_last=shuffle, pin_memory=True)
 
 
-def spec_wave_loader(split, batch_size, shuffle, num_workers, mode="r2"):
-    return DataLoader(SpecWaveSet(split, mode), batch_size=batch_size, shuffle=shuffle,
+def spec_wave_loader(split, batch_size, shuffle, num_workers, mode="r2", wave_window=None):
+    return DataLoader(SpecWaveSet(split, mode, wave_window), batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, drop_last=shuffle, pin_memory=True)
