@@ -17,7 +17,7 @@ from model.batvision import RotDepth
 from model import PretrainedResNet, PretrainedViT, BeyondI2DDepth, EchoScanDepth
 from train_oaa import cos_lat
 
-KEYS = ["MAE", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
+KEYS = ["MAE", "MAE_plain", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
 BANDS = [("near<3", 0, 3), ("mid3-6", 3, 6), ("far>6", 6, 10)]
 
 # comparison baselines from train_baseline.py (ckpt args carry a "model" field)
@@ -90,6 +90,7 @@ def evaluate(run_dir, ckpt, device, max_depth=10.0):
         w = wlat * mask; B = D.shape[0]
         pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
         acc["MAE"] += float(pi((D - gt).abs() * w, w).mean()) * B
+        acc["MAE_plain"] += float(pi((D - gt).abs() * mask, mask).mean()) * B   # unweighted (mask only)
         acc["RMSE"] += float(pi(((D - gt) ** 2) * w, w).clamp(min=0).sqrt().mean()) * B
         acc["AbsRel"] += float(pi((D - gt).abs() / gt.clamp(min=0.1) * w, w).mean()) * B
         acc["log10"] += float(pi((torch.log10(D.clamp(min=0.1)) - torch.log10(gt.clamp(min=0.1))).abs() * w, w).mean()) * B

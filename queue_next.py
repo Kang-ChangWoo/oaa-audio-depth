@@ -17,6 +17,7 @@ ECO_PY = "/root/local1/changwoo/echodiff_env/bin/python"
 BASE = {**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
 REP_ENV = {**BASE, "DATA_MODULE": "data_0422", "R0422_SPLIT": "off3"}
 ECO_ENV = {**BASE, "DATA_MODULE": "data_mp3d", "HF_HOME": "/root/local1/changwoo/_echodiff_weights"}
+ECO_ENV.pop("PYTORCH_CUDA_ALLOC_CONF", None)   # torch 1.13 doesn't know expandable_segments -> hard crash
 
 BS = {"r2": 24, "fb": 14, "fs": 14, "cb": 14, "r6": 9, "r8": 7}
 NV = {"r2": 2, "fb": 4, "fs": 4, "cb": 4, "r6": 6, "r8": 8}
