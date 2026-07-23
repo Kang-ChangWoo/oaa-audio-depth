@@ -76,8 +76,10 @@ def done(run):
 
 
 def active(run):
-    """True if a training process for this run is already alive (avoid duplicate launches)."""
-    return subprocess.call(["pgrep", "-f", f"--run-name {run} "],
+    """True if a training process for this run is already alive (avoid duplicate launches).
+    NOTE: pattern must not start with '--' (pgrep would parse it as an option and always fail,
+    which silently disabled this guard and caused duplicate launches on 2026-07-23)."""
+    return subprocess.call(["pgrep", "-f", f"run-name {run}( |$)"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
