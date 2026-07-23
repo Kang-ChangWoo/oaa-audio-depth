@@ -54,8 +54,8 @@ def job(model, mode, shrink=1.0):
     if model == "oaa":       # ours: fullres decoder-upgrade + champion recipe + front-relative poses
         argv = [PY, "-u", "train_oaa.py", "--run-name", run, "--nviews", str(NVIEWS[mode]),
                 "--data-mode", mode, "--cond-mode", "adaln", "--full-res", "--full-res-enc",
-                "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--batch-size", b,
-                "--num-workers", "8", "--out-dir", "comparison"]
+                "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--epochs", "40",
+                "--batch-size", b, "--num-workers", "8", "--out-dir", "comparison"]
         return run, argv, BASE_ENV
     if model == "eco":       # isolated env (torch 1.13 / SD-UNet / wav2vec2)
         argv = [ECO_PY, "-u", "train_echodiffusion.py", "--run-name", run, "--mode", mode,
