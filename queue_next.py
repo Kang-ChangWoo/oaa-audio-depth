@@ -92,7 +92,7 @@ def baseline_job(model, mode):
 
 # (job_factory, ready_predicate) in priority order
 JOBS = [(lambda n=n, w=w: eco_job(n, w), eco_ready)
-        for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wlong", "long"), ("eco_r2_wnone", "none"))]
+        for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wnone", "none"))]   # wlong dropped (time-axis was a misread; channel matrix below)
 JOBS += [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
          for m in ("r2", "fb", "r6")]   # r8 replaced by the accum-2 fix (oaa_r8_e40a2) below
 JOBS += [(lambda m=m: e40_job(m), lambda: True) for m in ("fs", "cb")]   # bmax killed early -> run e40 directly
@@ -127,8 +127,15 @@ def eco_ch_job(mode, wm):
     return run, argv, ECO_ENV, "comparison_mp3d"
 
 
+# fast baseline fins for 4/6/8ch BEFORE the eco channel matrix (they cost minutes each);
+# then the MP3D eco matrix; then Replica eco fins; byd LAST of everything (user 2026-07-23/24).
+JOBS += [(lambda mm=(model, mode): baseline_job(*mm), lambda: True)
+         for model in ("batvision", "echoscan", "vit", "resnet")
+         for mode in ("fb", "r6", "r8")]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
+JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
+JOBS += [(lambda mm=("beyond", mode): baseline_job(*mm), lambda: True) for mode in ("r2", "fb", "r6", "r8")]
 
 
 def free_gpus(busy):
