@@ -132,6 +132,24 @@ def eco_ch_job(mode, wm):
 JOBS += [(lambda mm=(model, mode): baseline_job(*mm), lambda: True)
          for model in ("batvision", "echoscan", "vit", "resnet")
          for mode in ("fb", "r6", "r8")]
+# MP3D OAA (user 2026-07-24: "oaa도 돌려야지") — the MP3D comparison table has no OAA rows since
+# the bilinear-era runs were purged. Same fullres recipe as the Replica bmax round; r8 gets the
+# accum-2 batch parity fix from the start. HEAVY: MP3D is 6x Replica (fb~22h, r8~41h).
+MP3D_ENV = {**BASE, "DATA_MODULE": "data_mp3d"}
+
+
+def oaa_mp3d_job(mode):
+    nv = {"r2": 2, "fb": 4, "r6": 6, "r8": 8}[mode]
+    argv = [PY, "-u", "train_oaa.py", "--run-name", f"oaa_{mode}", "--nviews", str(nv),
+            "--data-mode", mode, "--cond-mode", "adaln", "--full-res", "--full-res-enc",
+            "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--epochs", "40",
+            "--batch-size", str(BS[mode]), "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    if mode == "r8":
+        argv += ["--accum", "2"]
+    return f"oaa_{mode}", argv, MP3D_ENV, "comparison_mp3d"
+
+
+JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r2", "fb", "r6", "r8")]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
 JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
