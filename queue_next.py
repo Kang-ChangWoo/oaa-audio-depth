@@ -32,7 +32,7 @@ def eco_ready():
     global _eco_ok
     if not _eco_ok:                                    # cache success only; retry while failing
         _eco_ok = os.path.exists(ECO_PY) and subprocess.call(
-            [ECO_PY, "-c", "import torch, mmcv, transformers, diffusers"],
+            [ECO_PY, "-c", "import torch, mmcv, transformers"],   # diffusers unused by the model
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=MAIN) == 0
     return _eco_ok
 
@@ -58,11 +58,12 @@ def eco_job(name, wave_mode):
     return name, argv, ECO_ENV, "comparison_mp3d"
 
 
-# (job_factory, ready_predicate) in priority order
-JOBS = [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
-        for m in ("r2", "fb", "fs", "cb", "r6", "r8")]
-JOBS += [(lambda n=n, w=w: eco_job(n, w), eco_ready)
-         for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wlong", "long"), ("eco_r2_wnone", "none"))]
+# (job_factory, ready_predicate) in priority order — eco FIRST (user 2026-07-23: MP3D
+# EchoDiffusion before the e40 twins)
+JOBS = [(lambda n=n, w=w: eco_job(n, w), eco_ready)
+        for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wlong", "long"), ("eco_r2_wnone", "none"))]
+JOBS += [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
+         for m in ("r2", "fb", "fs", "cb", "r6", "r8")]
 
 
 def free_gpus(busy):

@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-ROOT = "/root/local2/replica_0422_lite"
+ROOT = os.environ.get("REPLICA_ROOT", "/root/local2/replica_0422_lite")   # env override for machines where data lives elsewhere
 SR = 48000
 MAX_DEPTH = 10.0                                  # same as MP3D (data.py); depth >10 m clamped to 1.0
 WINDOW = int(round(2 * MAX_DEPTH / 343.0 * SR))   # ~2799 samples (= MP3D's ~2823 @10 m round-trip)
