@@ -26,8 +26,7 @@ def cos_lat(h, device):
 def quick_val(model, va, device, max_depth, wlat):
     model.eval(); tot = wn = 0.0
     for b in va:
-        # fp32 (torch 1.13 SD-UNet path: bf16 bilinear upsample unimplemented)
-        D = model(b["spec"].to(device), b["wave"].to(device)).float() * max_depth
+        D = model(b["spec"].to(device), b["wave"][:, :2].to(device)).float() * max_depth   # fp32; CIDE uses front 2ch wave
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
@@ -37,7 +36,7 @@ def quick_val(model, va, device, max_depth, wlat):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", required=True)
-    p.add_argument("--in-ch", type=int, default=2)
+    p.add_argument("--mode", default="r2")   # data_0422 mode: r2/fb/r6/r8 -> spec in_ch 2/4/6/8
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup-ep", type=float, default=2.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -51,9 +50,10 @@ def main():
     device = torch.device("cuda")
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
 
-    tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers)
-    va = _DM.spec_wave_loader("val", 12, False, a.num_workers)
-    model = EchoDiffusionDepth(in_ch=a.in_ch).to(device)
+    in_ch = _DM.IN_CH[a.mode]
+    tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers, a.mode)
+    va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode)
+    model = EchoDiffusionDepth(in_ch=in_ch).to(device)
     cfg = dict(vars(a)); cfg["model"] = "echodiffusion"
     tot = sum(x.numel() for x in model.parameters()); trn = sum(x.numel() for x in model.parameters() if x.requires_grad)
     print(f"[cfg] {cfg}", flush=True)
@@ -69,9 +69,9 @@ def main():
     for ep in range(a.epochs):
         model.train(); t0 = time.time(); run = 0.0; nb = 0
         for b in tr:
-            spec = b["spec"].to(device, non_blocking=True); wave = b["wave"].to(device, non_blocking=True)
+            spec = b["spec"].to(device, non_blocking=True); wave = b["wave"][:, :2].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
-            D = model(spec, wave)                       # fp32 (see quick_val note)
+            D = model(spec, wave)                       # fp32; CIDE wav2vec2 branch takes front 2ch wave
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

@@ -17,7 +17,7 @@ from train_oaa import cos_lat, quick_val
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", required=True)
-    p.add_argument("--mode", default="cB", choices=["r2", "cB", "r6", "r8"])
+    p.add_argument("--mode", default="r2")   # data.py: r2/cB/r6/r8 ; data_0422: r2/fb
     p.add_argument("--ngf", type=int, default=64)
     p.add_argument("--feat-c", type=int, default=32)
     p.add_argument("--lr", type=float, default=2e-3)

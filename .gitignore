@@ -4,3 +4,4 @@ __pycache__/
 out/
 comparison/*/
 !comparison/README.md
+comparison_mp3d/*/

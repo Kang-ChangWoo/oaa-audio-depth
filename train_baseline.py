@@ -38,7 +38,7 @@ def build_model(name, in_ch):
     if name == "beyond":
         return BeyondI2DDepth(in_ch=in_ch, pretrained_material=True)
     if name == "echoscan":
-        return EchoScanDepth(in_ch=2, fs=48000)
+        return EchoScanDepth(in_ch=in_ch, fs=48000)
     raise ValueError(name)
 
 
@@ -76,7 +76,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", required=True, choices=list(SPEC_MODELS) + list(WAVE_MODELS))
     p.add_argument("--run-name", required=True)
-    p.add_argument("--mode", default="cB", choices=["r2", "cB", "r6", "r8"])  # spec models only
+    p.add_argument("--mode", default="r2")   # loader mode (data.py: r2/cB/r6/r8; data_0422: r2/fb)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-ep", type=float, default=2.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -91,10 +91,10 @@ def main():
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
 
     is_wave = a.model in WAVE_MODELS
-    in_ch = 2 if is_wave else IN_CH[a.mode]
+    in_ch = IN_CH[a.mode]
     if is_wave:
-        tr = wave_loader("train", a.batch_size, True, a.num_workers)
-        va = wave_loader("val", 32, False, a.num_workers)
+        tr = wave_loader("train", a.batch_size, True, a.num_workers, a.mode)
+        va = wave_loader("val", 32, False, a.num_workers, a.mode)
     else:
         tr = loader("train", a.batch_size, True, a.num_workers, a.mode)
         va = loader("val", 32, False, a.num_workers, a.mode)

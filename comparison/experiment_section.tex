@@ -1,0 +1,275 @@
+% ============================================================================
+% Experiment section (Overleaf-ready). Documents the dataset, protocol, and the
+% exact modifications made to each prior-work baseline so it runs on our
+% audio-only ERP-depth task. Paste into the paper; fill in \tbd{} once test
+% numbers land. Requires: \usepackage{booktabs}.
+% ============================================================================
+\newcommand{\tbd}{\textcolor{red}{TBD}}
+% Method is a separate file (comparison/method.tex, \S\ref{sec:method}).
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Datasets and splits}
+\label{sec:dataset}
+We use two audio--depth datasets that share the same acquisition model: at each
+position a device emits a short $3$\,ms sweep and records the binaural response at
+four yaw orientations $\{0^\circ,90^\circ,180^\circ,270^\circ\}$, giving up to
+\emph{eight} orientation--ear channels ($4$ yaws $\times$ two ears) per position, all
+paired with an ERP depth map.
+
+\paragraph{Replica (primary).}
+$18$ scenes, $400$ poses each (a $10\times10$ position grid $\times$ four yaws).
+Each pose provides a binaural waveform (stereo, $48$\,kHz) and an ERP depth map that
+we resize to $256\times512$; the maximum depth is capped at $d_{\max}=10$\,m.
+
+\paragraph{Matterport3D (MP3D).}
+Real-HRTF binaural recordings on Matterport3D scans, at the same four yaws per
+location (contiguous indices, verified via the \texttt{locations.json} rotation
+quaternions). We use the released $256\times512$ magnitude-STFT / depth / mask cache
+with $28{,}800$ / $3{,}543$ / $3{,}600$ train / val / test samples and $d_{\max}=10$\,m.
+Its channel modes are $2$/$4$/$6$/$8$ (front binaural; front$+$one side; $\pm90^\circ$;
+all four yaws). The off3 scene-disjoint policy below is MP3D-style; MP3D results use
+the same models and protocol and are reported separately.
+
+\paragraph{Scene-disjoint split (off3).}
+We adopt a strictly \emph{scene-disjoint} split, holding out one scene per
+apartment/room/office family: $12$ scenes for training, and $\{$\texttt{apartment\_1},
+\texttt{frl\_apartment\_4}, \texttt{office\_3}$\}$ / $\{$\texttt{apartment\_2},
+\texttt{frl\_apartment\_5}, \texttt{office\_4}$\}$ for validation / test. A
+position-level random split is avoided: neighbouring grid positions are acoustically
+near-duplicate (median inter-set distance $0.26$\,m; ${\sim}13\%$ of validation
+positions lie within $0.1$\,m of a training position), which inflates the reported
+MAE by ${\sim}25\%$ through train/validation leakage.
+
+\subsection{Implementation details}
+\label{sec:impl}
+
+\paragraph{Input representation.}
+Unless a model consumes the raw waveform, the network input is a magnitude STFT of
+the binaural signal: we take the first $W$ samples of each channel
+($W = \lceil 2 d_{\max}/c \cdot f_s \rceil \approx 2{,}799$ at $d_{\max}=10$\,m,
+$c=343$\,m/s, $f_s=48$\,kHz, i.e.\ the round-trip window for the maximum depth),
+compute $\lvert\mathrm{STFT}\rvert$ (\texttt{n\_fft}$=512$, \texttt{win}$=400$,
+\texttt{hop}$=160$), and resize to $256\times512$. Multi-view inputs stack per-view
+binaural pairs channel-wise: the $2$-channel setting uses the front binaural
+$[0^\circ_L,0^\circ_R]$; the $4$-channel setting uses front$+$back
+$[0^\circ_L,0^\circ_R,180^\circ_L,180^\circ_R]$, which we found to outperform the
+orthogonal $[0^\circ,90^\circ,270^\circ]$ arrangement.
+
+\paragraph{Native-resolution outputs (fairness).}
+Every model---ours and all baselines---predicts depth \emph{natively} at
+$256\times512$. We deliberately avoid predicting at a lower resolution and
+upsampling the result, which would blur the output and unfairly penalise a baseline
+against the full-resolution ground truth. Because the STFT time axis is
+fake-resolution (the true response spans only ${\sim}18$ frames before
+interpolation), we keep \emph{encoders} slim where appropriate but never downscale
+the \emph{output}.
+
+\paragraph{Training.}
+All models are trained with a masked $L_1$ loss on valid depth pixels, AdamW
+(weight decay $10^{-4}$), a linear warmup followed by cosine decay, gradient
+clipping at $1.0$, and $30$ epochs. Baselines use learning rate $10^{-3}$ and batch
+size $32$ (EchoDiffusion $10^{-4}$; the large channel-stacked models use batch
+$16$). Our model (OAA) uses the champion recipe: AdaLN pose conditioning, learning
+rate $5\times10^{-4}$, batch size $16$, and an EMA ($0.999$) copy of the weights for
+evaluation. Model selection is on the validation cosine-latitude-weighted MAE.
+Optimisation runs in \texttt{bfloat16} autocast, except EchoDiffusion, whose
+vendored Stable-Diffusion U-Net is trained in \texttt{float32} (its
+gradient-checkpointed attention is incompatible with mixed-precision autocast under
+the isolated environment's \texttt{torch~1.13}). Precision does not affect final
+accuracy or the fairness of the comparison.
+
+\paragraph{Metrics.}
+We report cosine-latitude-weighted, per-image MAE, RMSE, AbsRel and $\delta_1$
+(all in metres, computed at $256\times512$), plus MAE within near ($<3$\,m), mid
+($3$--$6$\,m) and far ($>6$\,m) depth bands.
+
+\subsection{Baselines and their adaptations}
+\label{sec:baselines}
+Prior methods target different tasks (image-conditioned depth, room geometry,
+diffusion priors) and native resolutions. We port each to the audio-only,
+$256\times512$ ERP-depth setting, keeping the original architecture as intact as
+possible and changing only what is required. For each method we list the
+\emph{modifications} we made and the \emph{key issue} that makes the port
+non-trivial (and that qualifies how the comparison should be read).
+Table~\ref{tab:baseline-mods} summarises.
+
+\begin{itemize}\itemsep2pt
+\item \textbf{Pretrained ResNet-50 / ViT-B/16} (ImageNet backbones).
+  \begin{itemize}
+    \item \emph{Modified:} a learnable $1{\times}1$ conv adapts the $C$-channel
+      spectrogram to $3$-channel pseudo-RGB; the pretrained encoder is unchanged; a
+      light decoder emits native $256\times512$. ViT positional embeddings are
+      interpolated $14{\times}14\!\to\!16{\times}32$.
+    \item \emph{Issue:} strong domain gap---an ImageNet prior is applied to a
+      spectrogram it never saw; only the $1{\times}1$ stem is audio-specific. Tests
+      whether a generic vision prior transfers at all.
+  \end{itemize}
+
+\item \textbf{Beyond Image-to-Depth}~\cite{parida2021beyond} (audio\emph{-visual} depth).
+  \begin{itemize}
+    \item \emph{Modified:} the full four-branch model (audio, RGB-depth, material,
+      attention fusion) is kept, but the vision branch is fed an all-zero constant
+      image, making it audio-only. The audio decoder's $1{\times}1{\to}128{\times}128$
+      \emph{square} path is re-seeded from a $512{\times}2{\times}4$ grid to emit
+      native $256\times512$; the audio encoder input is slimmed to $256{\times}128$
+      to avoid a ${\sim}7$M-parameter flatten$\to$FC bottleneck.
+    \item \emph{Issue:} the method is intrinsically audio-visual; with a blank image
+      the fusion/attention branches ($\sim$280M of the 318M params) still run but are
+      uninformative. The comparison measures its \emph{audio} pathway, not the
+      published audio-visual system.
+  \end{itemize}
+
+\item \textbf{EchoScan}~\cite{yeon2024echoscan} (room geometry / height from RIRs).
+  \begin{itemize}
+    \item \emph{Modified:} the raw-waveform 1D-conv ResNet encoder is reused
+      verbatim; the height head is removed; the square
+      $16{\times}16{\to}1024{\times}1024$ floor-plan decoder is retargeted to a
+      $4{\times}8{\to}256{\times}512$ ERP decoder.
+    \item \emph{Issue:} the encoder collapses the signal to a global descriptor
+      ($512$-d) before decoding---adequate for a floor plan, but a lossy bottleneck
+      for dense ERP depth. We keep the waveform front-end but the global bottleneck
+      caps its accuracy.
+  \end{itemize}
+
+\item \textbf{EchoDiffusion}~\cite{zhang2024echodiffusion} (``diffusion'' depth prior).
+  \begin{itemize}
+    \item \emph{Modified:} the ASPP-ASFF stem accepts $C$ channels; a $1{\times}1$
+      $128{\to}512$ adapter matches the SD-U-Net width; only the SD-U-Net is
+      instantiated (the latent-diffusion VAE/CLIP stack is unused by the depth path
+      and crashes on an empty CLIP version); output is a plain sigmoid in $[0,1]$.
+    \item \emph{Issue (key):} despite the name, the released code has \emph{no
+      diffusion sampling} (a single forward at a fixed timestep) and loads \emph{no
+      Stable-Diffusion checkpoint}---the config U-Net is a small ($\sim$10.5M),
+      randomly-initialised custom network that no SD-v1 checkpoint fits. ``Their
+      model'' is thus a deterministic SD-shaped feature extractor trained from
+      scratch, and it additionally consumes both a spectrogram \emph{and} the raw
+      waveform (wav2vec2 branch). Runs in an isolated \texttt{torch~1.13}/\texttt{mmcv}
+      environment, in \texttt{float32}.
+  \end{itemize}
+
+\item \textbf{BatVision}~\cite{brunetto2023batvision} (channel-stacked U-Net).
+  \begin{itemize}
+    \item \emph{Modified:} used as released, input channels set to $C$, sigmoid depth
+      head at $256\times512$.
+    \item \emph{Issue:} channel stacking cannot exploit pose-alignable structure and
+      saturates as views are added---the direct foil to our pose-conditioned fusion.
+  \end{itemize}
+\end{itemize}
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}p{2.3cm}p{2.1cm}p{7.5cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Input} & \textbf{Modification for our setting} \\
+\midrule
+Pretrained ResNet-50 / ViT-B/16 & Spec ($C{\times}256{\times}512$) &
+Learnable $1{\times}1$ input adapter $C\!\to\!3$ (pseudo-RGB); ImageNet-pretrained
+encoder unchanged; lightweight decoder to native $256\times512$. ViT positional
+embeddings interpolated $14{\times}14\!\to\!16{\times}32$. \\
+\addlinespace
+Beyond Image-to-Depth~\cite{parida2021beyond} & Spec &
+Full four-branch model (audio, RGB-depth, material, attention fusion) kept intact;
+the vision branch is fed a constant (all-zero) image, making it audio-only. The
+audio decoder's $1{\times}1{\to}128{\times}128$ square path is re-seeded from a
+$512{\times}2{\times}4$ grid so the same up-conv stack emits native $256\times512$;
+the audio \emph{encoder} input is slimmed to $256{\times}128$ to avoid a
+${\sim}7$M-parameter flatten$\to$FC bottleneck. \\
+\addlinespace
+EchoScan~\cite{yeon2024echoscan} & Waveform &
+The raw-waveform 1D-conv ResNet encoder is reused verbatim; the height head is
+removed; the square $16{\times}16{\to}1024{\times}1024$ floor-plan decoder is
+retargeted to a $4{\times}8{\to}256{\times}512$ path (same up-conv stack, ERP
+aspect). \\
+\addlinespace
+EchoDiffusion~\cite{zhang2024echodiffusion} & Spec\,+\,Waveform &
+Deterministic SD-backbone ``econet'' (a single forward at fixed timestep; no
+diffusion sampling exists in the released code). We (i) let the ASPP-ASFF input
+conv accept $C$ channels, (ii) insert a $1{\times}1$ $128{\to}512$ adapter to the
+SD-U-Net's channel width, (iii) load only the SD-U-Net (the full latent-diffusion
+VAE/CLIP stack is unused by the depth path and is not instantiated), (iv) emit a
+sigmoid in $[0,1]$. No Stable-Diffusion checkpoint is loaded: the config U-Net is a
+small custom network ($\sim$10.5M params, $z\!=\!2$) that no SD-v1 checkpoint fits,
+and the original repository never loads one either; it is trained end-to-end. \\
+\addlinespace
+BatVision~\cite{brunetto2023batvision} & Spec &
+Channel-stacked U-Net baseline; used as released with input channels set to $C$ and
+a sigmoid depth head at $256\times512$. \\
+\midrule
+\textbf{OAA (ours)} & Spec &
+Full-resolution encoder ($256\times512$) with a deeper multi-scale-lift decoder and
+AdaLN pose conditioning; for the $4$-channel front/back input the view poses are
+$[(0^\circ,L),(0^\circ,R),(180^\circ,L),(180^\circ,R)]$. \\
+\bottomrule
+\end{tabular}
+\caption{Prior-work baselines and the exact adaptations made to run them on the
+audio-only $256\times512$ ERP-depth task. Architectures are otherwise unchanged.}
+\label{tab:baseline-mods}
+\end{table}
+
+\subsection{Results}
+\label{sec:results}
+Table~\ref{tab:main} reports test-set metrics under the off3 split. All methods
+share the input representation, split, loss, and evaluation protocol above; they
+differ only in architecture (and, for EchoScan/EchoDiffusion, in also consuming the
+raw waveform).
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}lrccccccc@{}}
+\toprule
+\textbf{Method} & \textbf{Params\,(M)} & \textbf{MAE}$\downarrow$ &
+\textbf{RMSE}$\downarrow$ & \textbf{AbsRel}$\downarrow$ & \textbf{log10}$\downarrow$ &
+\textbf{$\delta_1$}$\uparrow$ & \textbf{$\delta_2$}$\uparrow$ & \textbf{$\delta_3$}$\uparrow$ \\
+\midrule
+\multicolumn{9}{@{}l}{\emph{2-channel (front binaural)}}\\
+Pretrained ResNet-50        & 30.0 & 0.386 & 0.693 & 0.262 & 0.097 & 0.692 & 0.851 & 0.918 \\
+Pretrained ViT-B/16         & 89.9 & 0.307 & 0.587 & 0.168 & 0.073 & 0.769 & 0.907 & 0.955 \\
+EchoScan                    & 41.3 & 0.339 & 0.631 & 0.180 & 0.078 & 0.742 & 0.900 & 0.954 \\
+EchoDiffusion               & 156.1 & \textbf{0.281} & \textbf{0.550} & \textbf{0.163} & \textbf{0.070} & 0.783 & 0.909 & 0.955 \\
+Beyond Image-to-Depth       & 318.5 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+BatVision                   & 54.5 & 0.303 & 0.566 & 0.181 & 0.074 & 0.762 & 0.904 & 0.954 \\
+\textbf{OAA (ours)}         & \textbf{15.4} & 0.302 & 0.582 & 0.164 & \textbf{0.070} & \textbf{0.784} & \textbf{0.912} & \textbf{0.958} \\
+\midrule
+\multicolumn{9}{@{}l}{\emph{4-channel (front $+$ back)}}\\
+Pretrained ResNet-50        & 30.0 & 0.376 & 0.667 & 0.258 & 0.095 & 0.698 & 0.855 & 0.921 \\
+Pretrained ViT-B/16         & 89.9 & 0.341 & 0.634 & 0.194 & 0.080 & 0.738 & 0.894 & 0.951 \\
+EchoScan                    & 41.3 & 0.348 & 0.646 & 0.188 & 0.079 & 0.729 & 0.899 & 0.955 \\
+EchoDiffusion               & 156.1 & \textbf{0.272} & \textbf{0.525} & 0.156 & 0.067 & 0.789 & 0.915 & 0.961 \\
+Beyond Image-to-Depth       & 318.5 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+BatVision                   & 54.5 & 0.290 & 0.543 & 0.173 & 0.072 & 0.772 & 0.907 & 0.957 \\
+\textbf{OAA (ours)}         & \textbf{15.4} & 0.278 & 0.542 & \textbf{0.148} & \textbf{0.063} & \textbf{0.809} & \textbf{0.927} & \textbf{0.966} \\
+\midrule
+\multicolumn{9}{@{}l}{\emph{6-channel (front, $\pm90^\circ$)}}\\
+Pretrained ResNet-50        & 30.0 & 0.368 & 0.654 & 0.257 & 0.093 & 0.702 & 0.859 & 0.923 \\
+Pretrained ViT-B/16         & 89.9 & 0.300 & 0.566 & 0.169 & 0.073 & 0.767 & 0.905 & 0.956 \\
+EchoScan                    & 41.3 & 0.329 & 0.616 & 0.178 & 0.074 & 0.755 & 0.907 & 0.958 \\
+EchoDiffusion               & 156.1 & \textbf{0.260} & \textbf{0.512} & \textbf{0.153} & \textbf{0.065} & \textbf{0.801} & \textbf{0.921} & \textbf{0.962} \\
+Beyond Image-to-Depth       & 318.5 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+BatVision                   & 54.5 & 0.271 & 0.518 & 0.159 & 0.067 & 0.796 & 0.919 & 0.960 \\
+\textbf{OAA (ours)}         & 15.4 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\midrule
+\multicolumn{9}{@{}l}{\emph{8-channel (all four yaws)}}\\
+Pretrained ResNet-50        & 30.0 & 0.379 & 0.665 & 0.268 & 0.096 & 0.690 & 0.855 & 0.922 \\
+Pretrained ViT-B/16         & 89.9 & 0.280 & 0.525 & 0.164 & 0.070 & 0.780 & 0.912 & 0.959 \\
+EchoScan                    & 41.3 & 0.344 & 0.633 & 0.185 & 0.078 & 0.732 & 0.901 & 0.957 \\
+EchoDiffusion               & 156.1 & \textbf{0.257} & \textbf{0.504} & \textbf{0.153} & \textbf{0.064} & \textbf{0.803} & \textbf{0.920} & \textbf{0.962} \\
+Beyond Image-to-Depth       & 318.5 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+BatVision                   & 54.5 & 0.276 & 0.519 & 0.168 & 0.070 & 0.787 & 0.912 & 0.957 \\
+\textbf{OAA (ours)}         & 15.4 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\bottomrule
+\end{tabular}
+\caption{Audio-only ERP depth on Replica (off3 test split, $256\times512$). Metrics
+are cosine-latitude-weighted and per-image; lower is better except $\delta_k$
+($\delta{<}1.25^{k}$). EchoDiffusion ($156$M, and the only baseline that also consumes
+the raw waveform) is the strongest baseline on error magnitude; OAA (ours) leads the
+threshold accuracies at $2$\,ch with $10\times$ fewer parameters ($15.4$M). Beyond
+Image-to-Depth is still training. The OAA multi-view ($4$/$6$/$8$-ch) rows---where
+pose-conditioned fusion is expected to help most---are filled as training completes.}
+\label{tab:main}
+\end{table*}

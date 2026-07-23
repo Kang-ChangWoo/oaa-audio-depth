@@ -15,7 +15,8 @@ import numpy as np
 import torch
 
 # data module selectable at runtime: DATA_MODULE=data (MP3D, default) | data_0422 (Replica)
-loader = importlib.import_module(os.environ.get("DATA_MODULE", "data")).loader
+_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data"))
+loader = _DM.loader
 from model.oaa import OAAv2Depth
 
 
@@ -25,12 +26,12 @@ def cos_lat(h, device):
 
 
 @torch.no_grad()
-def quick_val(model, va, device, max_depth, wlat, nv):
+def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     model.eval(); tot = wn = 0.0
     for b in va:
-        sp = b["spec"][:, :nv]
+        sp = b["spec"][:, :nv].to(device)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            D = model(sp.to(device)).float() * max_depth
+            D = (model(sp, view_poses=vp) if vp is not None else model(sp)).float() * max_depth
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
@@ -50,6 +51,8 @@ def main():
     p.add_argument("--full-res-enc", action="store_true")
     p.add_argument("--dec-deep", action="store_true")
     p.add_argument("--multi-scale-lift", action="store_true")
+    p.add_argument("--data-mode", default="")   # loader mode override (e.g. 'fb' front-back 4ch on Replica);
+    #                                             default derived from nviews. Pose set auto from data module.
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -63,9 +66,10 @@ def main():
     device = torch.device("cuda")
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
 
-    dmode = {2: "r2", 4: "cB", 6: "r6", 8: "r8"}[a.nviews]
+    dmode = a.data_mode or {2: "r2", 4: "cB", 6: "r6", 8: "r8"}[a.nviews]
     tr = loader("train", a.batch_size, True, a.num_workers, dmode)
     va = loader("val", 32, False, a.num_workers, dmode)
+    vp = getattr(_DM, "POSES", {}).get(dmode)   # OAA view_poses for this mode (None -> model default)
 
     if a.full_res:
         from model.oaa_fullres import OAAv2Depth as OAAFullRes
@@ -93,7 +97,7 @@ def main():
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                D = model(spec)
+                D = model(spec, view_poses=vp) if vp is not None else model(spec)
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)   # masked L1, nothing else
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -105,7 +109,7 @@ def main():
                     q.copy_(w)
             run += float(loss.detach()); nb += 1
         run /= max(nb, 1)
-        vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews)
+        vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
         hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
         print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m", flush=True)
         if vmae < best:

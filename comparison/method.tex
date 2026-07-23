@@ -1,0 +1,96 @@
+% ============================================================================
+% Method (paper body). Written to match the implemented model in
+% model/oaa_fullres.py (class OAAv2Depth, full-resolution decoder-upgrade variant).
+% Requires: \usepackage{amsmath}. Notation: R=rays, N=views, M=mic tokens, C=width.
+% ============================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Problem setup}
+A device at a fixed position emits a short sweep and records the binaural response at
+one or more known yaw orientations. Stacking the two ears of each recorded
+orientation gives $N$ \emph{views}, indexed by a pose
+$\pi_i=(\psi_i,\epsilon_i)$ with yaw $\psi_i$ and ear sign $\epsilon_i\!\in\!\{-1,+1\}$
+($-1{=}$left, $+1{=}$right). Each view is a magnitude STFT
+$\mathbf{s}_i\!\in\!\mathbb{R}^{1\times H\times W}$ ($H{\times}W{=}256{\times}512$).
+The goal is a per-ray \emph{radial} depth map
+$\mathbf{d}\!\in\![0,d_{\max}]^{256\times512}$ over the equirectangular (ERP) sphere.
+Because the poses are known, the task is not to reconstruct stereo geometry but to
+\emph{fuse pose-aligned views}; our design makes this alignment explicit.
+
+\subsection{Per-view weight-shared encoder}
+All $N$ views are encoded by the \emph{same} 2-D encoder $E$, applied with the view
+axis folded onto the batch (Fig.~\ref{fig:arch}). $E$ begins with a learned strided
+stem that ingests the input at full $256\times512$ resolution---so the time axis,
+which carries echo delay, is seen before any pooling---and produces a coarse token
+grid of size $L_h\times L_w=16\times32$ with width $C$:
+\begin{equation}
+\mathbf{t}_i = E(\mathbf{s}_i)\in\mathbb{R}^{L_hL_w\times C},\qquad i=1,\dots,N .
+\end{equation}
+Sharing $E$ across views makes the parameter count \emph{independent of $N$}: adding
+orientations costs no extra weights, which is what lets the model scale from 2 to 8
+channels without growth.
+
+\subsection{Pose conditioning}
+Each pose is embedded as $\mathbf{p}_i=[\sin\psi_i,\cos\psi_i,\epsilon_i]$ and injected
+in two complementary ways. First, an additive pose embedding is added to the view
+tokens. Second, and more importantly, an \emph{adaptive LayerNorm} (AdaLN) predicts
+per-view scale/shift $(\gamma_i,\beta_i)=\mathrm{MLP}(\mathbf{p}_i)$ that modulate the
+normalisation inside every view-conditioned self-attention block,
+\begin{equation}
+\mathrm{AdaLN}(\mathbf{x};\mathbf{p}_i)=\gamma_i\odot\mathrm{LN}(\mathbf{x})+\beta_i .
+\end{equation}
+AdaLN is the single architectural change that produces a consistent accuracy gain in
+our ablations; additive conditioning alone is weaker.
+
+\subsection{Alternating intra/inter-view attention}
+Fusion alternates, for $T{=}2$ rounds, between two operators:
+\emph{(i) intra-view} self-attention with AdaLN pose conditioning, which refines each
+view's tokens independently under its own pose; and \emph{(ii) inter-view} attention
+that, for each spatial token, attends across the $N$ views. Alternating the two lets
+information move within and across orientations repeatedly:
+\begin{equation}
+\mathbf{F}^{(r+1)} = \mathrm{Inter}\!\big(\mathrm{Intra}(\mathbf{F}^{(r)};\{\mathbf{p}_i\})\big),
+\qquad r=0,\dots,T{-}1 .
+\end{equation}
+A channel-stacked CNN, by contrast, must commit to a single fixed mixing of the
+orientations and saturates as $N$ grows (\S\ref{sec:results}).
+
+\subsection{Ray--microphone geometric cross-attention}
+To read out an ERP depth map we lift a grid of output ray directions
+$\{\hat{\mathbf{r}}_j\}_{j=1}^{R}$ (elevation $\times$ azimuth) and let each ray
+cross-attend to the fused multi-view tokens. Crucially, the attention logits carry a
+deterministic per-$(\text{ray},\text{view})$ geometric bias: for ray $\hat{\mathbf{r}}_j$
+and view $i$ we rotate the ray into that microphone's frame,
+$\hat{\mathbf{r}}_j^{(i)}=R(\psi_i)^{\!\top}\hat{\mathbf{r}}_j$, and score its agreement
+with the ear axis $\hat{\mathbf{a}}_i=R(\psi_i)\,\hat{\mathbf{x}}$,
+\begin{equation}
+\mathrm{logit}_{j,i} = \frac{\mathbf{q}_j^{\!\top}\mathbf{k}_i}{\sqrt{C}}
+      + b\big(\hat{\mathbf{r}}_j^{(i)},\,\epsilon_i\,\hat{\mathbf{a}}_i\big),
+\end{equation}
+so a ray preferentially draws on the views whose orientation actually illuminates
+that direction. This is the mechanism that turns \emph{known pose} into a usable
+inductive bias.
+
+\subsection{Full-resolution multi-scale decoder}
+The decoder upgrades the coarse $16\times32$ ray tokens to a native $256\times512$
+depth map. A first stage upsamples the lift grid $ (L_h,L_w)\!\to\!(2L_h,2L_w)$ and
+injects a \emph{fine} ray-lift skip (the ``multi-scale lift''), after which a stack of
+ERP-aware residual blocks---2-D convolutions with \emph{circular} padding along the
+azimuth so the panorama wraps seamlessly---progressively upsample to full resolution.
+A final $1{\times}1$ head and sigmoid give radial depth
+$\mathbf{d}=d_{\max}\cdot\sigma(\cdot)$. Predicting natively at $256\times512$ (rather
+than upsampling a coarse map) is what makes the output directly comparable to the
+ground truth without an interpolation penalty.
+
+\subsection{Training objective}
+The model is trained end-to-end with a single masked $L_1$ loss on valid pixels,
+\begin{equation}
+\mathcal{L}=\frac{\sum_{u} m_u\,\lvert \mathbf{d}_u-\mathbf{d}^{\star}_u\rvert}{\sum_u m_u},
+\end{equation}
+where $m$ is the valid-depth mask. We keep an exponential moving average
+($0.999$) of the weights for evaluation. Auxiliary objectives (depth-bin
+classification, aleatoric uncertainty, SILog, gradient/normal terms) were tested and
+did not improve test accuracy, so the final model uses none. Because poses are known,
+the same trained model generalises zero-shot to arbitrary orientation subsets by
+simply passing the corresponding $\{\mathbf{p}_i\}$ at inference.
