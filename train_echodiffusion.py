@@ -26,7 +26,9 @@ def cos_lat(h, device):
 def quick_val(model, va, device, max_depth, wlat):
     model.eval(); tot = wn = 0.0
     for b in va:
-        D = model(b["spec"].to(device), b["wave"][:, :2].to(device)).float() * max_depth   # fp32; CIDE uses front 2ch wave
+        with torch.autocast("cuda", dtype=torch.bfloat16):   # bf16 = same as every other trainer here (2026-07-23)
+            D = model(b["spec"].to(device), b["wave"][:, :2].to(device))
+        D = D.float() * max_depth                             # CIDE uses front 2ch wave
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
@@ -59,7 +61,7 @@ def main():
     tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers, a.mode, **ww)
     va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode, **ww)
     model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if a.wave_mode == "none" else "cide").to(device)
-    cfg = dict(vars(a)); cfg["model"] = "echodiffusion"
+    cfg = dict(vars(a)); cfg["model"] = "echodiffusion"; cfg["amp"] = "bf16"
     tot = sum(x.numel() for x in model.parameters()); trn = sum(x.numel() for x in model.parameters() if x.requires_grad)
     print(f"[cfg] {cfg}", flush=True)
     print(f"[params] total={tot/1e6:.2f}M trainable={trn/1e6:.2f}M", flush=True)
@@ -76,7 +78,8 @@ def main():
         for b in tr:
             spec = b["spec"].to(device, non_blocking=True); wave = b["wave"][:, :2].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
-            D = model(spec, wave)                       # fp32; CIDE wav2vec2 branch takes front 2ch wave
+            with torch.autocast("cuda", dtype=torch.bfloat16):   # CIDE wav2vec2 branch takes front 2ch wave
+                D = model(spec, wave)
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

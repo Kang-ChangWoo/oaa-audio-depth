@@ -109,6 +109,11 @@ def checkpoint(func, inputs, params, flag):
                    explicitly take as arguments.
     :param flag: if False, disable gradient checkpointing.
     """
+    # Checkpointing force-disabled (2026-07-23): CheckpointFunction.backward re-runs the forward
+    # OUTSIDE the autocast context, so bf16 training crashes with mixed-dtype layer_norm. Memory
+    # is ample on 48GB GPUs; attention.py's BasicTransformerBlock also hardcodes flag=True, so the
+    # yaml use_checkpoint knob alone cannot turn this off.
+    return func(*inputs)
     if flag:
         args = tuple(inputs) + tuple(params)
         return CheckpointFunction.apply(func, len(inputs), *args)
