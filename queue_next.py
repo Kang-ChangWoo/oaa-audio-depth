@@ -97,8 +97,8 @@ JOBS += [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
          for m in ("r2", "fb", "r6")]   # r8 replaced by the accum-2 fix (oaa_r8_e40a2) below
 JOBS += [(lambda m=m: e40_job(m), lambda: True) for m in ("fs", "cb")]   # bmax killed early -> run e40 directly
 JOBS += [(lambda mm=(model, mode): baseline_job(*mm), (eco_ready if model == "eco" else (lambda: True)))
-         for model in ("batvision", "eco", "echoscan", "vit", "resnet", "beyond")
-         for mode in ("r2",)]   # ch2 first (user); fb/r6/r8 rounds follow after review
+         for model in ("batvision", "echoscan", "vit", "resnet", "eco")
+         for mode in ("r2",)]   # ch2 first (user); eco LAST; beyond DROPPED (user 2026-07-23: 25h/run 생략)
 
 
 def r8a2_job():
@@ -113,6 +113,22 @@ def r8a2_job():
 
 
 JOBS += [(r8a2_job, lambda: True)]
+
+
+def eco_ch_job(mode, wm):
+    """MP3D eco wave-CHANNEL ablation (user 2026-07-23: wave branch should scale 2/4/6/8 with the
+    mode, not the time axis): std = wave fixed at front 2ch, all = wave gets the mode's full
+    channel set, none = branch removed. r2 is covered by the running eco_r2_wstd/wnone."""
+    run = f"eco_{mode}_w{wm}"
+    b = "16" if mode == "fb" else "12"
+    argv = [ECO_PY, "-u", "train_echodiffusion.py", "--run-name", run, "--mode", mode,
+            "--wave-mode", wm, "--epochs", "40", "--batch-size", b,
+            "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    return run, argv, ECO_ENV, "comparison_mp3d"
+
+
+JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
+         for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
 
 
 def free_gpus(busy):

@@ -100,13 +100,15 @@ class _DiffusionWrapper(nn.Module):
 
 class CIDE(nn.Module):
     """Waveform -> cross-attention context (wav2vec2 branch).  Faithful copy of
-    ecoNet.CIDE.  wav2vec2 is used as a frozen feature extractor (no_grad)."""
+    ecoNet.CIDE.  wav2vec2 is used as a frozen feature extractor (no_grad).
+    in_wave: number of waveform channels mixed into the mono wav2vec2 input
+    (original: 2 = front binaural; the channel-scaling ablation feeds all views)."""
 
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, in_wave=2):
         super().__init__()
         self.wav2vec = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h")
         self.wav2vec.freeze_feature_extractor()
-        self.conv = nn.Conv1d(2, 1, kernel_size=1)
+        self.conv = nn.Conv1d(in_wave, 1, kernel_size=1)
         self.fc = nn.Sequential(nn.Linear(768, 400), nn.GELU(), nn.Linear(400, 100))
         self.dim = emb_dim
         self.m = nn.Softmax(dim=1)
@@ -146,7 +148,7 @@ class EchoDiffusionEncoder(nn.Module):
     """
 
     def __init__(self, in_ch=2, out_dim=1024, ldm_prior=(32, 64, 256), emb_dim=768,
-                 wave_mode="cide"):
+                 wave_mode="cide", wave_ch=2):
         super().__init__()
         self.wave_mode = wave_mode
 
@@ -172,7 +174,7 @@ class EchoDiffusionEncoder(nn.Module):
             self.cide_module = None
             self.const_ctx = nn.Parameter(torch.randn(1, 1, emb_dim) * 0.02)
         else:
-            self.cide_module = CIDE(emb_dim)
+            self.cide_module = CIDE(emb_dim, in_wave=wave_ch)
 
         # spec -> latents branch (in_conv now honors in_ch, see ASPP_ASFF.py)
         self.aspp_asff = UNet_aspp_asff(in_channels=in_ch)
@@ -289,15 +291,17 @@ class EchoDiffusionDepth(nn.Module):
         returns: (B, 1, 256, 512) depth in [0, 1]
     """
 
-    def __init__(self, in_ch=2, wave_mode="cide"):
+    def __init__(self, in_ch=2, wave_mode="cide", wave_ch=2):
         super().__init__()
         self.in_ch = in_ch
+        self.wave_ch = wave_ch
 
         embed_dim = 192
         channels_in = embed_dim * 8   # 1536
         channels_out = embed_dim      # 192
 
-        self.encoder = EchoDiffusionEncoder(in_ch=in_ch, out_dim=channels_in, wave_mode=wave_mode)
+        self.encoder = EchoDiffusionEncoder(in_ch=in_ch, out_dim=channels_in,
+                                            wave_mode=wave_mode, wave_ch=wave_ch)
         self.decoder = Decoder(channels_in, channels_out)
 
         self.last_layer_depth = nn.Sequential(

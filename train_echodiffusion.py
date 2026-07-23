@@ -23,12 +23,12 @@ def cos_lat(h, device):
 
 
 @torch.no_grad()
-def quick_val(model, va, device, max_depth, wlat):
+def quick_val(model, va, device, max_depth, wlat, wch=2):
     model.eval(); tot = wn = 0.0
     for b in va:
         with torch.autocast("cuda", dtype=torch.bfloat16):   # bf16 = same as every other trainer here (2026-07-23)
-            D = model(b["spec"].to(device), b["wave"][:, :2].to(device))
-        D = D.float() * max_depth                             # CIDE uses front 2ch wave
+            D = model(b["spec"].to(device), b["wave"][:, :wch].to(device))
+        D = D.float() * max_depth
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
@@ -39,9 +39,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", required=True)
     p.add_argument("--mode", default="r2")   # data mode: r2/fb/r6/r8 -> spec in_ch 2/4/6/8
-    # waveform-branch ablation (2026-07-23): std = original CIDE on the 10m-round-trip cut;
-    # long = CIDE on a longer raw cut (spec unchanged); none = CIDE removed (learned const token)
-    p.add_argument("--wave-mode", default="std", choices=["std", "long", "none"])
+    # waveform-branch ablation (2026-07-23): std = original CIDE on the front 2ch (fixed even as
+    # spec channels grow); all = CIDE gets ALL of the mode's wave channels (2/4/6/8 — the channel-
+    # scaling variant the user asked for); long = 2ch but longer raw cut; none = CIDE removed
+    p.add_argument("--wave-mode", default="std", choices=["std", "all", "long", "none"])
     p.add_argument("--wave-window", type=int, default=48000)  # samples for --wave-mode long (1.0 s @48k)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup-ep", type=float, default=2.0)
@@ -60,7 +61,9 @@ def main():
     ww = {"wave_window": a.wave_window} if a.wave_mode == "long" else {}
     tr = _DM.spec_wave_loader("train", a.batch_size, True, a.num_workers, a.mode, **ww)
     va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode, **ww)
-    model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if a.wave_mode == "none" else "cide").to(device)
+    wave_ch = in_ch if a.wave_mode == "all" else 2
+    model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if a.wave_mode == "none" else "cide",
+                               wave_ch=wave_ch).to(device)
     cfg = dict(vars(a)); cfg["model"] = "echodiffusion"; cfg["amp"] = "bf16"
     tot = sum(x.numel() for x in model.parameters()); trn = sum(x.numel() for x in model.parameters() if x.requires_grad)
     print(f"[cfg] {cfg}", flush=True)
@@ -76,9 +79,9 @@ def main():
     for ep in range(a.epochs):
         model.train(); t0 = time.time(); run = 0.0; nb = 0
         for b in tr:
-            spec = b["spec"].to(device, non_blocking=True); wave = b["wave"][:, :2].to(device, non_blocking=True)
+            spec = b["spec"].to(device, non_blocking=True); wave = b["wave"][:, :wave_ch].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
-            with torch.autocast("cuda", dtype=torch.bfloat16):   # CIDE wav2vec2 branch takes front 2ch wave
+            with torch.autocast("cuda", dtype=torch.bfloat16):   # CIDE gets wave_ch channels (std:2, all:mode)
                 D = model(spec, wave)
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
             opt.zero_grad(); loss.backward()
@@ -86,7 +89,7 @@ def main():
             opt.step(); sched.step()
             run += float(loss.detach()); nb += 1
         run /= max(nb, 1)
-        vmae = quick_val(model, va, device, a.max_depth, wlat)
+        vmae = quick_val(model, va, device, a.max_depth, wlat, wave_ch)
         hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
         print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m", flush=True)
         if vmae < best:
