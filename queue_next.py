@@ -164,7 +164,7 @@ def b32_job(mode, seed):
 
 
 JOBS += [(lambda mm=(m, s): b32_job(*mm), lambda: True)
-         for m, s in (("r6", 0), ("r8", 0), ("r6", 1), ("r8", 1))]
+         for s in range(5) for m in ("r6", "r8")]   # 5-seed pool (user 2026-07-24: GPU 놀리지 말 것)
 
 # Replica-first priority (user 2026-07-24): finish ALL Replica rows before MP3D heavies
 JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
