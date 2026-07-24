@@ -224,7 +224,7 @@ JOBS += [(lambda s=s: mp3d_full_job(s), lambda: True) for s in (0, 1, 2)]
 JOBS += [(lambda mm=(m, s): plain_rep_job(*mm), lambda: True)
          for m in ("r6", "r8") for s in (0, 1)]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
-         for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
+         for mode in ("fb", "r6", "r8") for wm in ("all", "none")]   # wstd는 r6/r8 생략 (user 2026-07-25: fb에서 무가치 판정)
 
 
 def free_gpus(busy):
