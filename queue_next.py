@@ -167,6 +167,42 @@ def oaa_mp3d_plain_job():
 # on the new pipeline at 0.9189/0.9242 ≈ legacy 0.919 — the fullres package (1.0085) is confirmed
 # as the 2ch regression cause without retraining.
 JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("fb", "r6", "r8")]   # r2 done
+
+
+def plain_rep_job(mode, seed):
+    # fullres 책임론 판정 (user 2026-07-25): Replica r6/r8을 순정 champion 레시피(패키지 없음,
+    # native bs32, lr1e-3)로 — 순정 r8이 r6에 붙으면 fullres(마이크로배치) 탓, 아니면 데이터 성질.
+    nv = {"r6": 6, "r8": 8}[mode]
+    run = f"oaa_{mode}_plain_s{seed}"
+    argv = [PY, "-u", "train_oaa.py", "--run-name", run, "--nviews", str(nv),
+            "--data-mode", mode, "--cond-mode", "adaln", "--lr", "1e-3", "--epochs", "40",
+            "--batch-size", "32", "--seed", str(seed), "--num-workers", "8", "--out-dir", "comparison"]
+    return run, argv, REP_ENV, "comparison"
+
+
+def mp3d_champ_job(seed):
+    # MP3D champion(순정 cB, bs32 native, lr1e-3) 다중 시드 — 신규 파이프라인 정식 수치 확보
+    argv = [PY, "-u", "train_oaa.py", "--run-name", f"oaa_cb_champ_s{seed}", "--nviews", "4",
+            "--data-mode", "cb", "--cond-mode", "adaln", "--lr", "1e-3", "--epochs", "40",
+            "--batch-size", "32", "--seed", str(seed), "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    return f"oaa_cb_champ_s{seed}", argv, MP3D_ENV, "comparison_mp3d"
+
+
+def mp3d_full_job(seed):
+    # MP3D fullres 풀스택(cB, 캐시 fullres 0.7729/0.7764와 동일 지오메트리) — 배치 최대(bs16 x accum2 = 32)
+    argv = [PY, "-u", "train_oaa.py", "--run-name", f"oaa_cb_full32_s{seed}", "--nviews", "4",
+            "--data-mode", "cb", "--cond-mode", "adaln", "--full-res", "--full-res-enc",
+            "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--epochs", "40",
+            "--batch-size", "16", "--accum", "2", "--seed", str(seed), "--num-workers", "8",
+            "--out-dir", "comparison_mp3d"]
+    return f"oaa_cb_full32_s{seed}", argv, MP3D_ENV, "comparison_mp3d"
+
+
+# user 2026-07-25: MP3D champion/fullres 다중 시드(배치 최대) — Replica plain 진단보다 우선
+JOBS += [(lambda s=s: mp3d_champ_job(s), lambda: True) for s in (0, 1, 2)]
+JOBS += [(lambda s=s: mp3d_full_job(s), lambda: True) for s in (0, 1, 2)]
+JOBS += [(lambda mm=(m, s): plain_rep_job(*mm), lambda: True)
+         for m in ("r6", "r8") for s in (0, 1)]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
 
