@@ -50,6 +50,7 @@ def main():
     p.add_argument("--batch-size", type=int, default=12)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--patience", type=int, default=12)  # early stop: epochs without val improvement (eco always peaks ep14-16 then degrades monotonically; best.pth already saved)
     p.add_argument("--max-depth", type=float, default=10.0)
     p.add_argument("--out-dir", default="comparison")
     a = p.parse_args()
@@ -75,7 +76,7 @@ def main():
         opt, lambda s: (s + 1) / warm if s < warm else 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, total - warm))))
     wlat = cos_lat(256, device).view(1, 1, 256, 1)
 
-    best = 1e9; hist = []
+    best = 1e9; best_ep = -1; hist = []
     for ep in range(a.epochs):
         model.train(); t0 = time.time(); run = 0.0; nb = 0
         for b in tr:
@@ -93,8 +94,11 @@ def main():
         hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
         print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m", flush=True)
         if vmae < best:
-            best = vmae
+            best = vmae; best_ep = ep
             torch.save({"state_dict": model.state_dict(), "args": cfg}, os.path.join(rd, "best.pth"))
+        elif ep - best_ep >= a.patience:
+            print(f"[early-stop] no val improvement since ep {best_ep} (patience {a.patience})", flush=True)
+            break
     torch.save({"state_dict": model.state_dict(), "args": cfg}, os.path.join(rd, "last.pth"))
     json.dump({"best_val_mae_m": best, "hist": hist, "args": cfg},
               open(os.path.join(rd, "train_done.json"), "w"), indent=2)
