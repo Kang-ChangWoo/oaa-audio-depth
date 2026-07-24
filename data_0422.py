@@ -40,7 +40,8 @@ _OFFS = {"r2": (0,), "fb": (0, 2), "fs": (0, 1), "r6": (0, 1, 3), "r8": (0, 1, 2
 # Channel-level specs: list of (yaw-slot, ear) with ear 0=L, 1=R. Pair modes derive from _OFFS;
 # mixed-ear modes (single ear per extra yaw) are listed explicitly — e.g. cb = MP3D champion cB.
 _CH = {m: [(o, e) for o in offs for e in (0, 1)] for m, offs in _OFFS.items()}
-_CH["cb"] = [(0, 0), (0, 1), (1, 1), (3, 0)]        # [0L, 0R, 90R, 270L] 4ch
+_CH["cb"] = [(0, 0), (0, 1), (1, 1), (3, 0)]
+_CH["cB"] = _CH["cb"]        # eval.py _NV2MODE fallback uses the cache module's capitalisation        # [0L, 0R, 90R, 270L] 4ch
 MODES = tuple(_CH)
 IN_CH = {m: len(ch) for m, ch in _CH.items()}       # r2:2, fb/fs/cb:4, r6:6, r8:8
 # OAA view_poses per mode (yaw rad, ear sign -1=L/+1=R), relative to the front frame:

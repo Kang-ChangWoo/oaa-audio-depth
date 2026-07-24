@@ -18,14 +18,20 @@ ROOT = "/root/local1/changwoo/matterport3d_0303renew"
 KEYS = "/root/storage/implementation/shared_audio/test_for_audio_tof/cache/rx_wave"   # {split}_keys.json
 SR = 48000
 MAX_DEPTH = 10.0
-WINDOW = int(round(2 * MAX_DEPTH / 343.0 * SR))   # ~2799 samples (10 m round-trip; matches data_0422/MP3D)
+WINDOW = 2823   # MP3D legacy convention (340 m/s round-trip @10 m) — user 2026-07-24: MP3D와 Replica는
+#               # 데이터셋별 고유 창 유지 (Replica는 343 m/s = 2799). 캐시 체크포인트와 창 일치.
 H, W = 256, 512
 N_FFT, WIN, HOP = 512, 400, 160
 
-_OFFS = {"r2": (0,), "fb": (0, 2), "r6": (0, 1, 3), "r8": (0, 1, 2, 3)}   # group-relative yaw slots (L,R each)
-MODES = tuple(_OFFS)
-IN_CH = {m: 2 * len(o) for m, o in _OFFS.items()}
-POSES = {m: [(o * (math.pi / 2), e) for o in offs for e in (-1.0, 1.0)] for m, offs in _OFFS.items()}
+_OFFS = {"r2": (0,), "fb": (0, 2), "fs": (0, 1), "r6": (0, 1, 3), "r8": (0, 1, 2, 3)}  # group-relative yaw slots (L,R each)
+# Channel-level specs (mirror of data_0422): (yaw-slot, ear) with ear 0=L, 1=R. cb = the MP3D
+# champion config [0L, 0R, 90R, 270L] so cache-trained cB checkpoints evaluate natively.
+_CH = {m: [(o, e) for o in offs for e in (0, 1)] for m, offs in _OFFS.items()}
+_CH["cb"] = [(0, 0), (0, 1), (1, 1), (3, 0)]
+_CH["cB"] = _CH["cb"]        # eval.py _NV2MODE fallback uses the cache module's capitalisation
+MODES = tuple(_CH)
+IN_CH = {m: len(ch) for m, ch in _CH.items()}
+POSES = {m: [(o * (math.pi / 2), (-1.0, 1.0)[e]) for o, e in ch] for m, ch in _CH.items()}
 
 
 _NSCENE = {}
@@ -74,8 +80,11 @@ def _load_wave1(wpath, frames=WINDOW):
 
 
 def _load_wave(scene, front, mode, frames=WINDOW):
-    steps = _group_steps(front, _OFFS[mode])
-    return torch.cat([_load_wave1(f"{ROOT}/{scene}/audio_wav/audio_{s:03d}.wav", frames) for s in steps], 0)
+    chans = _CH[mode]
+    offs = sorted({o for o, _ in chans})
+    step = dict(zip(offs, _group_steps(front, offs)))
+    wav = {o: _load_wave1(f"{ROOT}/{scene}/audio_wav/audio_{step[o]:03d}.wav", frames) for o in offs}
+    return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
 def _load_depth(scene, front):
@@ -92,7 +101,7 @@ def _load_depth(scene, front):
 
 class _Base(Dataset):
     def __init__(self, split, mode="r2"):
-        assert mode in _OFFS, mode
+        assert mode in _CH, mode
         self.mode, self.samples = mode, _index(split)
 
     def __len__(self):

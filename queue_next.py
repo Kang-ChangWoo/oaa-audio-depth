@@ -178,7 +178,9 @@ def oaa_mp3d_plain_job():
     return "oaa_r2_plain", argv, MP3D_ENV, "comparison_mp3d"
 
 
-JOBS += [(oaa_mp3d_plain_job, lambda: True)]
+# plain-r2 diagnostic DROPPED (2026-07-24): the cache plain-2ch ckpts (REL_2ch_adaln) evaluated
+# on the new pipeline at 0.9189/0.9242 ≈ legacy 0.919 — the fullres package (1.0085) is confirmed
+# as the 2ch regression cause without retraining.
 JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r2", "fb", "r6", "r8")]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
