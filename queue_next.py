@@ -199,9 +199,8 @@ def mp3d_full_job(seed):
 
 
 def mp3d_baseline_job(model, mode):
-    # MP3D baseline 매트릭스 (user 2026-07-25: "baseline 쭉") — nearest+2823 최신 규격, 40ep, 48GB 배치.
-    # 이미 유효한 vit_r2/rn_r2(완료), rn_fb(구머신 진행)는 제외하고 큐잉.
-    run = f"{_STEM[model]}_{mode}"
+    # MP3D baseline 매트릭스 (user 2026-07-25: "baseline 쭉", _fin 접미사 통일) — nearest+2823, 40ep.
+    run = f"{_STEM[model]}_{mode}_fin"
     b = str(BASE_BS[model][mode])
     if model == "batvision":
         argv = [PY, "-u", "train_batvision.py", "--run-name", run, "--mode", mode, "--epochs", "40",
