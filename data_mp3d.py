@@ -28,13 +28,26 @@ IN_CH = {m: 2 * len(o) for m, o in _OFFS.items()}
 POSES = {m: [(o * (math.pi / 2), e) for o in offs for e in (-1.0, 1.0)] for m, offs in _OFFS.items()}
 
 
+_NSCENE = {}
+
+
+def _scene_n(sc):
+    if sc not in _NSCENE:
+        _NSCENE[sc] = len(glob.glob(f"{ROOT}/{sc}/audio_wav/audio_*.wav"))
+    return _NSCENE[sc]
+
+
 def _index(split):
-    """Original MP3D split samples as (scene, front_step) from the cached key list."""
+    """Original MP3D split samples as (scene, front_step) from the cached key list.
+    Samples whose 4-yaw group is incomplete on disk are dropped (ZMojNkEp431's render stops at
+    audio_342 while the key list expects 343 — 3 val samples; multi-view modes crashed on it)."""
     keys = json.load(open(f"{KEYS}/{split}_keys.json"))
     out = []
     for k in keys:
         sc, idx = k.split("/")
-        out.append((sc, int(idx)))
+        i = int(idx)
+        if 4 * (i // 4) + 3 < _scene_n(sc):
+            out.append((sc, i))
     return out
 
 

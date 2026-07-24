@@ -149,10 +149,11 @@ def oaa_mp3d_job(mode):
     return f"oaa_{mode}", argv, MP3D_ENV, "comparison_mp3d"
 
 
+# Replica-first priority (user 2026-07-24): finish ALL Replica rows before MP3D heavies
+JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
 JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r2", "fb", "r6", "r8")]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
-JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
 JOBS += [(lambda mm=("beyond", mode): baseline_job(*mm), lambda: True) for mode in ("r2", "fb", "r6", "r8")]
 
 
