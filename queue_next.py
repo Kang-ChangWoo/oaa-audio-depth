@@ -149,21 +149,22 @@ def oaa_mp3d_job(mode):
     return f"oaa_{mode}", argv, MP3D_ENV, "comparison_mp3d"
 
 
-# r6-vs-r8 rank confirmation (user 2026-07-24): identical recipe both channels — bs7 x accum2
-# (effective 14), 40ep, 2 seeds. oaa_r8_e40a2 already IS the r8 seed-0 leg of this design.
-def parity_job(mode, seed):
-    nv = {"r6": 6, "r8": 8}[mode]
-    run = f"oaa_{mode}_p14_s{seed}"
+# r6-vs-r8 rank confirmation, EFFECTIVE BATCH 32 (user 2026-07-24: 6/8ch를 2/4ch 세팅에 맞춰
+# batch 32, accumulation 사용). Same fullres+dec-deep+msl stack (full_res_enc 256x512, 15.35M),
+# 40ep, 2 seeds per channel. Memory wall: r6 bs8x4, r8 bs4x8.
+def b32_job(mode, seed):
+    nv, bs, ac = {"r6": (6, 8, 4), "r8": (8, 4, 8)}[mode]
+    run = f"oaa_{mode}_b32_s{seed}"
     argv = [PY, "-u", "train_oaa.py", "--run-name", run, "--nviews", str(nv),
             "--data-mode", mode, "--cond-mode", "adaln", "--full-res", "--full-res-enc",
             "--dec-deep", "--multi-scale-lift", "--lr", "5e-4", "--epochs", "40",
-            "--batch-size", "7", "--accum", "2", "--seed", str(seed),
+            "--batch-size", str(bs), "--accum", str(ac), "--seed", str(seed),
             "--num-workers", "8", "--out-dir", "comparison"]
     return run, argv, REP_ENV, "comparison"
 
 
-JOBS += [(lambda mm=(m, s): parity_job(*mm), lambda: True)
-         for m, s in (("r6", 0), ("r6", 1), ("r8", 1))]
+JOBS += [(lambda mm=(m, s): b32_job(*mm), lambda: True)
+         for m, s in (("r6", 0), ("r8", 0), ("r6", 1), ("r8", 1))]
 
 # Replica-first priority (user 2026-07-24): finish ALL Replica rows before MP3D heavies
 JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
