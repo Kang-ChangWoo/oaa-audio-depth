@@ -90,15 +90,10 @@ def baseline_job(model, mode):
     return run, argv, REP_ENV, "comparison"
 
 
-# (job_factory, ready_predicate) in priority order
-JOBS = [(lambda n=n, w=w: eco_job(n, w), eco_ready)
-        for n, w in (("eco_r2_wstd", "std"), ("eco_r2_wnone", "none"))]   # wlong dropped (time-axis was a misread; channel matrix below)
-JOBS += [(lambda m=m: e40_job(m), lambda m=m: done(f"comparison/oaa_{m}_bmax"))
-         for m in ("r2", "fb", "r6")]   # r8 replaced by the accum-2 fix (oaa_r8_e40a2) below
-JOBS += [(lambda m=m: e40_job(m), lambda: True) for m in ("fs", "cb")]   # bmax killed early -> run e40 directly
-JOBS += [(lambda mm=(model, mode): baseline_job(*mm), (eco_ready if model == "eco" else (lambda: True)))
-         for model in ("batvision", "echoscan", "vit", "resnet", "eco")
-         for mode in ("r2",)]   # ch2 first (user); eco LAST; beyond DROPPED (user 2026-07-23: 25h/run 생략)
+# (job_factory, ready_predicate) in priority order — 2026-07-24 slim-down: everything already
+# completed or owned by the OTHER session's plan (fe_* seed pool, deprecated/ archive) is removed
+# so this queue stops resurrecting archived runs. This machine owns: MP3D OAA + MP3D eco matrix.
+JOBS = []
 
 
 def r8a2_job():
@@ -112,7 +107,6 @@ def r8a2_job():
     return "oaa_r8_e40a2", argv, REP_ENV, "comparison"
 
 
-JOBS += [(r8a2_job, lambda: True)]
 
 
 def eco_ch_job(mode, wm):
@@ -127,11 +121,6 @@ def eco_ch_job(mode, wm):
     return run, argv, ECO_ENV, "comparison_mp3d"
 
 
-# fast baseline fins for 4/6/8ch BEFORE the eco channel matrix (they cost minutes each);
-# then the MP3D eco matrix; then Replica eco fins; byd LAST of everything (user 2026-07-23/24).
-JOBS += [(lambda mm=(model, mode): baseline_job(*mm), lambda: True)
-         for model in ("batvision", "echoscan", "vit", "resnet")
-         for mode in ("fb", "r6", "r8")]
 # MP3D OAA (user 2026-07-24: "oaa도 돌려야지") — the MP3D comparison table has no OAA rows since
 # the bilinear-era runs were purged. Same fullres recipe as the Replica bmax round; r8 gets the
 # accum-2 batch parity fix from the start. HEAVY: MP3D is 6x Replica (fb~22h, r8~41h).
@@ -163,11 +152,7 @@ def b32_job(mode, seed):
     return run, argv, REP_ENV, "comparison"
 
 
-JOBS += [(lambda mm=(m, s): b32_job(*mm), lambda: True)
-         for s in range(5) for m in ("r6", "r8")]   # 5-seed pool (user 2026-07-24: GPU 놀리지 말 것)
 
-# Replica-first priority (user 2026-07-24): finish ALL Replica rows before MP3D heavies
-JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
 def oaa_mp3d_plain_job():
     # MP3D 2ch diagnostic (2026-07-24): plain OAAv2 champion recipe (no fullres package, bs32,
     # lr1e-3) on the NEW pipeline — separates "package/recipe hurt 2ch" (expect ~0.92) from
@@ -181,10 +166,9 @@ def oaa_mp3d_plain_job():
 # plain-r2 diagnostic DROPPED (2026-07-24): the cache plain-2ch ckpts (REL_2ch_adaln) evaluated
 # on the new pipeline at 0.9189/0.9242 ≈ legacy 0.919 — the fullres package (1.0085) is confirmed
 # as the 2ch regression cause without retraining.
-JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r2", "fb", "r6", "r8")]
+JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("fb", "r6", "r8")]   # r2 done
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
-JOBS += [(lambda mm=("beyond", mode): baseline_job(*mm), lambda: True) for mode in ("r2", "fb", "r6", "r8")]
 
 
 def free_gpus(busy):
