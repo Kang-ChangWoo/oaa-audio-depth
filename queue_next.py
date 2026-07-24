@@ -96,6 +96,20 @@ def baseline_job(model, mode):
 JOBS = []
 
 
+def ctx_job(seed):
+    # eco-차용 ctx 실험 (user 2026-07-25 "해보자, 빠르게"): wave->K토큰 cross-attn 조회(zero-init).
+    # 기준 = oaa_r2_e40 0.2894 (동일 구성, ctx만 없음). Replica r2 = 3분/ep로 최속 검증 구간.
+    argv = [PY, "-u", "train_oaa.py", "--run-name", f"oaa_r2_ctx_s{seed}", "--nviews", "2",
+            "--data-mode", "r2", "--cond-mode", "adaln", "--full-res", "--full-res-enc",
+            "--dec-deep", "--multi-scale-lift", "--ctx-mode", "wave", "--lr", "5e-4",
+            "--epochs", "40", "--batch-size", "24", "--seed", str(seed),
+            "--num-workers", "8", "--out-dir", "comparison"]
+    return f"oaa_r2_ctx_s{seed}", argv, REP_ENV, "comparison"
+
+
+JOBS += [(lambda s=s: ctx_job(s), lambda: True) for s in (0, 1)]
+
+
 def r8a2_job():
     # 8ch batch-parity fix (2026-07-23): bmax/e40 ran r8 at bs7 (fullres 8ch = 46.8GB memory
     # wall) vs 14 at 4ch — the gradient-noise mismatch is the prime suspect for r8's val/test

@@ -289,7 +289,8 @@ class _OAABase(nn.Module):
     def __init__(self, C, in_ch, norm, roll_sign, lh=LH, lw=LW, dec_deep=False, enc_res=(128, 256), nviews=4,
                  pe_mode="raw", pe_K=4, multi_scale_lift=False,
                  head_mode="regress", n_bins=64, min_depth=0.1, max_depth=10.0, unc_mode="none", sigma_b=1.0,
-                 tof_mode="none", tof_bins=16, pose_head=False, pose_cls=False, dec_mode="convt"):
+                 tof_mode="none", tof_bins=16, pose_head=False, pose_cls=False, dec_mode="convt",
+                 ctx_mode="none", ctx_tokens=4):
         super().__init__()
         self.C = C; self.in_ch = in_ch; self.roll_sign = roll_sign; self.nv = nviews
         self.lh, self.lw, self.M = lh, lw, lh * lw; self.enc_res = enc_res
@@ -299,6 +300,23 @@ class _OAABase(nn.Module):
         assert dec_mode in ("convt", "resize_erp"); self.dec_mode = dec_mode
         assert pe_mode in ("raw", "fourier"), pe_mode
         assert head_mode in ("regress", "bins") and unc_mode in ("none", "laplace") and tof_mode in ("none", "pool", "echo", "gcc")
+        # ctx (2026-07-25, eco-차용): 파형 타이밍(room-scale) 신호를 K개 컨텍스트 토큰으로 만들어
+        # ERP ray 토큰이 CROSS-ATTENTION으로 조회. gated_add(matched-echo, +0.8% 한계)와 달리 ray별
+        # 선택적 참조가 가능. zero-init 게이트로 시작(무해 보장).
+        assert ctx_mode in ("none", "wave")
+        self.ctx_mode = ctx_mode
+        if ctx_mode == "wave":
+            k = ctx_tokens
+            self.ctx_enc = nn.Sequential(                                # (B,2,W) raw wave -> (B, k*C)
+                nn.Conv1d(2, 32, 15, stride=4, padding=7), nn.GELU(),
+                nn.Conv1d(32, 64, 9, stride=4, padding=4), nn.GELU(),
+                nn.Conv1d(64, 128, 5, stride=4, padding=2), nn.GELU(),
+                nn.AdaptiveAvgPool1d(8), nn.Flatten(),
+                nn.Linear(128 * 8, C * k))
+            self.ctx_k = k
+            self.ctx_q = nn.Linear(C, C); self.ctx_kv = nn.Linear(C, 2 * C)
+            self.ctx_out = nn.Linear(C, C)
+            nn.init.zeros_(self.ctx_out.weight); nn.init.zeros_(self.ctx_out.bias)  # zero-init gate
         self.shuffle_eval_seed = 0
         self.enc = ViewEncoder(C, in_ch=in_ch, norm=norm, lh=lh, lw=lw, enc_res=enc_res)
         self.pose_emb = nn.Sequential(nn.Linear(3, C), nn.GELU(), nn.Linear(C, C))
@@ -475,6 +493,16 @@ class _OAABase(nn.Module):
         s = (self.tof_r(h) @ self.tof_b(z).transpose(-2, -1)) / math.sqrt(C)   # ray-bin evidence (B,R,K)
         return h + self.tof_out(s.softmax(-1) @ z)                      # zero-init inject -> starts unchanged
 
+    def _ctx(self, h, wave):
+        """ctx(wave): raw front-binaural wave -> K context tokens; ERP ray tokens cross-attend.
+        h (B,M,C), wave (B,>=2,W). Residual is zero-init gated (starts as identity)."""
+        B = h.size(0)
+        t = self.ctx_enc(wave[:, :2].float()).view(B, self.ctx_k, self.C)       # (B,K,C)
+        q = self.ctx_q(h)                                                       # (B,M,C)
+        k, v = self.ctx_kv(t).chunk(2, dim=-1)                                  # (B,K,C) x2
+        att = torch.softmax(q @ k.transpose(1, 2) / math.sqrt(self.C), dim=-1)  # (B,M,K)
+        return h + self.ctx_out(att @ v)
+
     def _echo(self, h, wave):
         """C (correct): waveform matched-filter ToF -> global radial feature injected into ERP tokens.
         ToF lives in the WAVEFORM (phase/timing), NOT magnitude spec (T0 confirmed) -> matched_filter."""
@@ -579,6 +607,7 @@ class OAAv2Depth(_OAABase):
         if self.tof_mode == "pool": h = self._tof(h, F4)                  # C(pool, DEAD per T0): spec-token ToF
         elif self.tof_mode == "echo" and wave is not None: h = self._echo(h, wave)   # C(echo): waveform matched-filter
         elif self.tof_mode == "gcc" and wave is not None: h = self._gcc(h, wave)     # GCC-PHAT interaural timing
+        if self.ctx_mode == "wave" and wave is not None: h = self._ctx(h, wave)      # eco-차용: cross-attn 컨텍스트 조회
         h = h + self.glob_dir(self._dirfeat(dir6)).unsqueeze(0)
         for blk in self.erp: h = blk(h)
         if self.multi_scale_lift:

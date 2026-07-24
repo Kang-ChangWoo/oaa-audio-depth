@@ -50,12 +50,13 @@ def build(args):
         return m, mode, IN_CH[mode], "spec", None
     nv = args.get("nviews", 4)                                              # oaa
     dmode = args.get("data_mode") or _NV2MODE[nv]
-    if args.get("full_res"):                                                # ours: fullres decoder upgrade
+    if args.get("full_res") or args.get("full_res_enc"):                    # ours: fullres decoder upgrade
+        #   (research-repo fullres ckpts carry full_res_enc but no full_res flag — same module)
         from model.oaa_fullres import OAAv2Depth as OAAFullRes
         m = OAAFullRes(C=args.get("dim", 256), nviews=nv, in_ch=1, cond_mode=args.get("cond_mode", "adaln"),
                        enc_res=((256, 512) if args.get("full_res_enc") else (128, 256)),
                        dec_deep=args.get("dec_deep", False), multi_scale_lift=args.get("multi_scale_lift", False),
-                       max_depth=args.get("max_depth", 10.0))
+                       max_depth=args.get("max_depth", 10.0), ctx_mode=args.get("ctx_mode", "none"))
     else:
         m = OAAv2Depth(C=args.get("dim", 256), nviews=nv, cond_mode=args.get("cond_mode", "adaln"),
                        max_depth=args.get("max_depth", 10.0))
@@ -78,14 +79,18 @@ def evaluate(run_dir, ckpt, device, max_depth=10.0):
     params_m = sum(p.numel() for p in model.parameters()) / 1e6
     max_depth = ck["args"].get("max_depth", max_depth)
     _bs = int(os.environ.get("EVAL_BS", "32"))   # lower (EVAL_BS=4) to fit eval on a shared/contended GPU
-    ld = wave_loader("test", _bs, False, 5, dmode) if kind == "wave" else loader("test", _bs, False, 5, dmode)
+    if kind == "spec" and ck["args"].get("ctx_mode") == "wave":
+        ld = _DM.spec_wave_loader("test", _bs, False, 5, dmode)          # ctx models need the raw wave too
+    else:
+        ld = wave_loader("test", _bs, False, 5, dmode) if kind == "wave" else loader("test", _bs, False, 5, dmode)
     wlat = cos_lat(256, device).view(1, 1, 256, 1)
     acc = {k: 0.0 for k in KEYS}; n = 0
     be = {b[0]: [0.0, 0.0] for b in BANDS}
     for b in ld:
         x = b["wave"][:, :nch].to(device) if kind == "wave" else b["spec"][:, :nch].to(device)
+        kw = {"wave": b["wave"].to(device)} if (kind == "spec" and "wave" in b) else {}
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            D = (model(x, view_poses=poses) if poses is not None else model(x)).float() * max_depth
+            D = (model(x, view_poses=poses, **kw) if poses is not None else model(x, **kw)).float() * max_depth
         gt = b["depth"].to(device) * max_depth; mask = b["mask"].to(device)
         w = wlat * mask; B = D.shape[0]
         pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))

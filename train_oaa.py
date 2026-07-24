@@ -10,7 +10,7 @@ Recipe (decisive parts):
 
 Run:  python3 train_oaa.py --run-name r8_s0 --nviews 8
 """
-import os, json, math, time, argparse, copy, importlib
+import os, json, math, time, argparse, copy, importlib, random
 import numpy as np
 import torch
 
@@ -30,8 +30,9 @@ def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     model.eval(); tot = wn = 0.0
     for b in va:
         sp = b["spec"][:, :nv].to(device)
+        kw = {"wave": b["wave"].to(device)} if ("wave" in b and getattr(model, "ctx_mode", "none") == "wave") else {}
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            D = (model(sp, view_poses=vp) if vp is not None else model(sp)).float() * max_depth
+            D = (model(sp, view_poses=vp, **kw) if vp is not None else model(sp, **kw)).float() * max_depth
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
@@ -51,11 +52,16 @@ def main():
     p.add_argument("--full-res-enc", action="store_true")
     p.add_argument("--dec-deep", action="store_true")
     p.add_argument("--multi-scale-lift", action="store_true")
+    p.add_argument("--ctx-mode", default="none", choices=["none", "wave"])  # eco-차용: wave->K토큰 cross-attn 조회 (zero-init)
     p.add_argument("--data-mode", default="")   # loader mode override (e.g. 'fb' front-back 4ch on Replica);
     #                                             default derived from nviews. Pose set auto from data module.
     p.add_argument("--accum", type=int, default=1)   # grad-accumulation steps: effective batch = batch-size*accum
     #   (reproduce the A6000 champion effective bs16 on a 24GB 3090, e.g. --batch-size 4 --accum 4)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--wd", type=float, default=1e-4)   # weight decay (8ch overfits on Replica; try 5e-4/1e-3)
+    # r8 anti-overfit augmentations (ported from the research repo, Replica 8ch overfits):
+    p.add_argument("--mirror-aug", action="store_true")   # LR-mirror: _MIRROR8 channel permute + azimuth flip of depth/mask
+    p.add_argument("--subset-aug", action="store_true")   # view-dropout: zero out 2/4 random views per batch (poses fixed)
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=32)
@@ -69,8 +75,11 @@ def main():
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
 
     dmode = a.data_mode or {2: "r2", 4: "cB", 6: "r6", 8: "r8"}[a.nviews]
-    tr = loader("train", a.batch_size, True, a.num_workers, dmode)
-    va = loader("val", 32, False, a.num_workers, dmode)
+    _ld = _DM.spec_wave_loader if a.ctx_mode == "wave" else loader   # ctx needs the raw wave in the batch
+    tr = _ld("train", a.batch_size, True, a.num_workers, dmode)
+    # val batch follows the train micro-batch (capped at 32): with full_res_enc at 6/8ch a bs-32
+    # val forward spikes 6-8 GB above the training footprint and OOMs the epoch-0 validation.
+    va = _ld("val", min(32, max(a.batch_size, 4)), False, a.num_workers, dmode)
     vp = getattr(_DM, "POSES", {}).get(dmode)   # OAA view_poses for this mode (None -> model default)
 
     if a.full_res:
@@ -78,12 +87,13 @@ def main():
         model = OAAFullRes(C=a.dim, nviews=a.nviews, in_ch=1, cond_mode=a.cond_mode,
                            enc_res=((256, 512) if a.full_res_enc else (128, 256)),
                            dec_deep=a.dec_deep, multi_scale_lift=a.multi_scale_lift,
-                           max_depth=a.max_depth).to(device)
+                           max_depth=a.max_depth, ctx_mode=a.ctx_mode).to(device)
     else:
+        assert a.ctx_mode == "none", "ctx-mode requires --full-res (module lives in oaa_fullres)"
         model = OAAv2Depth(C=a.dim, nviews=a.nviews, cond_mode=a.cond_mode, max_depth=a.max_depth).to(device)
     print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M", flush=True)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
+    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     accum = max(1, a.accum)
     steps_per_ep = math.ceil(len(tr) / accum)        # optimizer steps (schedule counts these, not micro-batches)
     total = a.epochs * steps_per_ep; warm = max(1, int(a.warmup_ep * steps_per_ep))
@@ -102,8 +112,19 @@ def main():
         for i, b in enumerate(tr):
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
+            vp_in, spec_in = vp, spec
+            if a.mirror_aug and random.random() < 0.5:          # (yaw,e)->(-yaw,-e) permute + azimuth flip
+                _MIR8 = [1, 0, 7, 6, 5, 4, 3, 2]
+                spec_in = spec[:, _MIR8]
+                gt = torch.flip(gt, [-1]); mask = torch.flip(mask, [-1])
+            if a.subset_aug and random.random() < 0.5:          # view-dropout (model nv fixed; zeroed views act as silent mics)
+                k = random.choice([2, 4])
+                idx = random.sample(range(spec_in.shape[1]), k)
+                spec_in = spec_in.clone(); spec_in[:, idx] = 0
+            kw = {"wave": b["wave"].to(device, non_blocking=True)} if a.ctx_mode == "wave" else {}
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                D = model(spec, view_poses=vp) if vp is not None else model(spec)
+                D = (model(spec_in, view_poses=vp_in, **kw) if vp_in is not None
+                     else model(spec_in, **kw))
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)   # masked L1, nothing else
             (loss / accum).backward()                                  # accumulate grads over `accum` micro-batches
             run += float(loss.detach()); nb += 1
