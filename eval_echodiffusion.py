@@ -21,15 +21,20 @@ def cos_lat(h, device):
 def evaluate(run_dir, ckpt, device):
     ck = torch.load(os.path.join(run_dir, f"{ckpt}.pth"), map_location="cpu", weights_only=False)
     a = ck["args"]; mode = a.get("mode", "r2"); md = a.get("max_depth", 10.0)
-    model = EchoDiffusionDepth(in_ch=_DM.IN_CH[mode]).to(device)
+    in_ch = _DM.IN_CH[mode]
+    wm = a.get("wave_mode", "std")                     # std/all/long/none (ablation runs)
+    wch = in_ch if wm == "all" else 2
+    model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if wm == "none" else "cide",
+                               wave_ch=wch).to(device)
     model.load_state_dict(ck["state_dict"]); model.eval()
     params_m = sum(p.numel() for p in model.parameters()) / 1e6
-    ld = _DM.spec_wave_loader("test", 16, False, 5, mode)
+    ww = {"wave_window": a.get("wave_window", 48000)} if wm == "long" else {}
+    ld = _DM.spec_wave_loader("test", 16, False, 5, mode, **ww)
     wlat = cos_lat(256, device).view(1, 1, 256, 1)
     acc = {k: 0.0 for k in KEYS}; n = 0
     be = {b[0]: [0.0, 0.0] for b in BANDS}
     for b in ld:
-        D = (model(b["spec"].to(device), b["wave"][:, :2].to(device)).float() * md)   # fp32
+        D = (model(b["spec"].to(device), b["wave"][:, :wch].to(device)).float() * md)   # fp32
         gt = b["depth"].to(device) * md; mask = b["mask"].to(device)
         w = wlat * mask; B = D.shape[0]
         pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
