@@ -196,6 +196,10 @@ def free_gpus(busy):
 
 pending = list(JOBS)
 running = {}                                           # gpu -> (proc, run)
+# settle delay: freshly-started trainings take up to ~2min to allocate CUDA memory; launching
+# during that window co-locates two jobs on one GPU (r6_b32_s0/s1 died this way on 2026-07-24)
+print("[qn] settling 120s before first launch cycle", flush=True)
+time.sleep(120)
 while pending or running:
     for g, (p, run) in list(running.items()):
         if p.poll() is not None:
