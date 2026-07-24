@@ -166,7 +166,7 @@ def oaa_mp3d_plain_job():
 # plain-r2 diagnostic DROPPED (2026-07-24): the cache plain-2ch ckpts (REL_2ch_adaln) evaluated
 # on the new pipeline at 0.9189/0.9242 ≈ legacy 0.919 — the fullres package (1.0085) is confirmed
 # as the 2ch regression cause without retraining.
-JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("fb", "r6", "r8")]   # r2 done
+JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r6", "r8")]   # r2 done; fb 중단(user 2026-07-25, best@ep14 보존)
 
 
 def plain_rep_job(mode, seed):
