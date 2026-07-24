@@ -188,14 +188,25 @@ while pending or running:
         if p.poll() is not None:
             print(f"[qn] GPU{g} finished {run} (rc={p.returncode})", flush=True)
             del running[g]
+    def pickable(j):
+        if not j[1]():
+            return False
+        run, _a, _e, outdir = j[0]()
+        if done(f"{outdir}/{run}") or already_running(run):
+            pending.remove(j)          # drain finished/running jobs without consuming a GPU slot
+            return False
+        return True
+
     for g in free_gpus(set(running)):
-        ready = next((j for j in pending if j[1]()), None)
+        ready = None
+        for j in list(pending):
+            if pickable(j):
+                ready = j
+                break
         if ready is None:
             break
         pending.remove(ready)
         run, argv, env, outdir = ready[0]()
-        if done(f"{outdir}/{run}") or already_running(run):
-            continue
         log = open(f"{MAIN}/comparison/logs/{run}.log", "w")
         p = subprocess.Popen(argv, cwd=MAIN, env={**env, "CUDA_VISIBLE_DEVICES": str(g)},
                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
