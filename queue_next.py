@@ -198,7 +198,27 @@ def mp3d_full_job(seed):
     return f"oaa_cb_full32_s{seed}", argv, MP3D_ENV, "comparison_mp3d"
 
 
-# user 2026-07-25: MP3D champion/fullres 다중 시드(배치 최대) — Replica plain 진단보다 우선
+def mp3d_baseline_job(model, mode):
+    # MP3D baseline 매트릭스 (user 2026-07-25: "baseline 쭉") — nearest+2823 최신 규격, 40ep, 48GB 배치.
+    # 이미 유효한 vit_r2/rn_r2(완료), rn_fb(구머신 진행)는 제외하고 큐잉.
+    run = f"{_STEM[model]}_{mode}"
+    b = str(BASE_BS[model][mode])
+    if model == "batvision":
+        argv = [PY, "-u", "train_batvision.py", "--run-name", run, "--mode", mode, "--epochs", "40",
+                "--batch-size", b, "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    else:
+        argv = [PY, "-u", "train_baseline.py", "--model", model, "--run-name", run, "--mode", mode,
+                "--epochs", "40", "--batch-size", b, "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    return run, argv, MP3D_ENV, "comparison_mp3d"
+
+
+_MP3D_BASE = [("batvision", m) for m in ("r2", "fb", "r6", "r8")] + \
+             [("echoscan", m) for m in ("r2", "fb", "r6", "r8")] + \
+             [("vit", m) for m in ("fb", "r6", "r8")] + \
+             [("resnet", m) for m in ("r6", "r8")]
+JOBS += [(lambda mm=mm: mp3d_baseline_job(*mm), lambda: True) for mm in _MP3D_BASE]
+
+# user 2026-07-25: MP3D champion/fullres 다중 시드(배치 최대)
 JOBS += [(lambda s=s: mp3d_champ_job(s), lambda: True) for s in (0, 1, 2)]
 JOBS += [(lambda s=s: mp3d_full_job(s), lambda: True) for s in (0, 1, 2)]
 JOBS += [(lambda mm=(m, s): plain_rep_job(*mm), lambda: True)
