@@ -168,6 +168,17 @@ JOBS += [(lambda mm=(m, s): b32_job(*mm), lambda: True)
 
 # Replica-first priority (user 2026-07-24): finish ALL Replica rows before MP3D heavies
 JOBS += [(lambda mm=("eco", mode): baseline_job(*mm), eco_ready) for mode in ("fb", "r6", "r8")]
+def oaa_mp3d_plain_job():
+    # MP3D 2ch diagnostic (2026-07-24): plain OAAv2 champion recipe (no fullres package, bs32,
+    # lr1e-3) on the NEW pipeline — separates "package/recipe hurt 2ch" (expect ~0.92) from
+    # "pipeline/GT shift" (expect ~1.0; then oaa_r2=1.0085 is condition-wide, relative table valid).
+    argv = [PY, "-u", "train_oaa.py", "--run-name", "oaa_r2_plain", "--nviews", "2",
+            "--data-mode", "r2", "--cond-mode", "adaln", "--lr", "1e-3", "--epochs", "40",
+            "--batch-size", "32", "--num-workers", "8", "--out-dir", "comparison_mp3d"]
+    return "oaa_r2_plain", argv, MP3D_ENV, "comparison_mp3d"
+
+
+JOBS += [(oaa_mp3d_plain_job, lambda: True)]
 JOBS += [(lambda m=m: oaa_mp3d_job(m), lambda: True) for m in ("r2", "fb", "r6", "r8")]
 JOBS += [(lambda mm=(mode, wm): eco_ch_job(*mm), eco_ready)
          for mode in ("fb", "r6", "r8") for wm in ("all", "std", "none")]
