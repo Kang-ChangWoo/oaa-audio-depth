@@ -1,13 +1,18 @@
-"""Replica per-step spectrogram cache builder (Replica version of build_spec_cache_mp3d.py).
+"""Replica per-step spectrogram cache builder (Replica version of tools/build_spec_cache_mp3d.py).
 
 Per-step binaural magnitude STFT (2,256,512) as float32 npy — same WINDOW=2799 (343 m/s) recipe,
-bit-identical to on-the-fly. Resumable. Run:  python3 build_spec_cache_replica.py
+bit-identical to on-the-fly. Resumable. Run:  python tools/build_spec_cache_replica.py
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, sys, glob, argparse
 import numpy as np
 from multiprocessing import Pool
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data_0422 as dr
 
 

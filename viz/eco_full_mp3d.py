@@ -1,9 +1,15 @@
 """EchoDiffusion predictions for the FULL test set (isolated env) -> one float16 memmap per mode.
 
-  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... <echodiff_env>/bin/python viz_eco_full.py
-Writes comparison/viz_all/eco_{mode}.npy with shape (N_test, 256, 512); consumed by viz_full.py
+  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... <echodiff_env>/bin/python viz/eco_full.py
+Writes comparison/viz_all/eco_{mode}.npy with shape (N_test, 256, 512); consumed by viz/full.py
 and deleted after the PNGs are rendered.
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os
 os.environ.setdefault("DATA_MODULE", "data_mp3d")
 import numpy as np
@@ -13,7 +19,7 @@ from torch.utils.data import DataLoader
 import data_mp3d as dm
 from model.echodiffusion import EchoDiffusionDepth
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison_mp3d", "viz_all")
 os.makedirs(OUT, exist_ok=True)
 device = torch.device("cuda")

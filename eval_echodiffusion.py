@@ -3,18 +3,16 @@
   CUDA_VISIBLE_DEVICES=? DATA_MODULE=data_0422 R0422_SPLIT=off3 HF_HOME=<hf_cache> \
     <echodiff_env>/bin/python eval_echodiffusion.py --run-name eco_r2 eco_fb eco_r6 eco_r8
 """
-import os, json, math, argparse, importlib
+import os, json, math, argparse
 import torch
 from model.echodiffusion import EchoDiffusionDepth
 
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_0422"))
-KEYS = ["MAE", "MAE_plain", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
-BANDS = [("near<3", 0, 3), ("mid3-6", 3, 6), ("far>6", 6, 10)]
+from core.data import get_data_module
+_DM = get_data_module("data_0422")
+from core.metrics import KEYS, BANDS
 
 
-def cos_lat(h, device):
-    v = torch.arange(h, device=device, dtype=torch.float32)
-    return torch.cos((math.pi / 2) - (v + 0.5) / h * math.pi).clamp(min=1e-3)
+from core.metrics import cos_lat
 
 
 @torch.no_grad()

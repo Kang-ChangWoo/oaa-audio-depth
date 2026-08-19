@@ -5,13 +5,21 @@ k=7 (single mic) is extrapolation. For each k we average 3 fixed-seed random sub
 (exhaustive C(8,k) is too many). One data pass evaluates every variant (loader dominates).
 
   DATA_MODULE=data_0422 R0422_SPLIT=off3 EVAL_BS=6 CUDA_VISIBLE_DEVICES=7 \
-    python3 eval_micdrop.py --run-name oaa_r8_kany
+    python analysis/micdrop.py --run-name oaa_r8_kany
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, json, argparse, random
 import torch
 
-import eval as ev
-from train_oaa import cos_lat
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
+from core.metrics import cos_lat
 
 DRAWS = 3
 
@@ -38,13 +46,13 @@ def main():
         try: saved = json.load(open(a.out))
         except Exception: saved = {}
     for run in a.run_name:
-        rd = ev.resolve_run(run, ["out", "comparison"])
+        rd = resolve_run(run, ["out", "comparison"])
         ck = torch.load(os.path.join(rd, f"{a.ckpt}.pth"), map_location="cpu", weights_only=False)
-        model, dmode, nch, kind, poses = ev.build(ck["args"])
+        model, dmode, nch, kind, poses = build(ck["args"], _DM)
         model.load_state_dict(ck["state_dict"]); model.to(device).eval()
         max_depth = ck["args"].get("max_depth", 10.0)
         vs = variants_for(nch)
-        ld = ev.loader("test", int(os.environ.get("EVAL_BS", "6")), False, 5, dmode)
+        ld = _DM.loader("test", int(os.environ.get("EVAL_BS", "6")), False, 5, dmode)
         wlat = cos_lat(256, device).view(1, 1, 256, 1)
         MK = ["MAE", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
         acc = {t: {k: 0.0 for k in MK} | {"n": 0} for t, _ in vs}

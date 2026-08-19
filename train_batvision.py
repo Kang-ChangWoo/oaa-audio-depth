@@ -1,17 +1,30 @@
 """BatVision baseline trainer (CNN recipe — note the LR differs from OAA's on purpose).
 
 Recipe: masked L1, AdamW lr 2e-3 wd 1e-4, warmup 1 epoch + cosine, batch 32, 30 epochs, no EMA.
-Run:  python3 train_batvision.py --run-name bat_r8_s0 --mode r8
+Run:  python train_batvision.py --run-name bat_r8_s0 --mode r8
 """
-import os, json, math, time, argparse, importlib
+import os, json, math, time, argparse
 import numpy as np
 import torch
 
-# data module selectable at runtime: DATA_MODULE=data (MP3D, default) | data_0422 (Replica)
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_mp3d"))
+from core.data import get_data_module
+from core.metrics import cos_lat
+_DM = get_data_module()          # DATA_MODULE=data_mp3d (default) | data_0422
 loader, IN_CH = _DM.loader, _DM.IN_CH
 from model.batvision import RotDepth
-from train_oaa import cos_lat, quick_val
+
+
+@torch.no_grad()
+def quick_val(model, va, device, max_depth, wlat, nch):
+    """cos-latitude-weighted val MAE (metres) of a spectrogram model."""
+    model.eval(); tot = wn = 0.0
+    for b in va:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            D = model(b["spec"][:, :nch].to(device)).float() * max_depth
+        gt = b["depth"].to(device) * max_depth
+        w = wlat * b["mask"].to(device)
+        tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
+    return tot / max(wn, 1e-6)
 
 
 def main():

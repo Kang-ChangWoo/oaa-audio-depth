@@ -2,13 +2,18 @@
 
 Saves per-step binaural magnitude STFT (2,256,512) as float32 npy — all channel modes (r2/fb/fs/r6/r8/cb)
 assemble from the same cache. Kept in fp32, so bit-identical to on-the-fly (zero effect on metrics).
-Resumable (existing files are skipped). Run:  python3 build_spec_cache_mp3d.py [--out DIR]
+Resumable (existing files are skipped). Run:  python tools/build_spec_cache_mp3d.py [--out DIR]
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, sys, glob, argparse
 import numpy as np
 from multiprocessing import Pool
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data_mp3d as dm
 
 

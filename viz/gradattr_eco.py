@@ -6,14 +6,21 @@ w.r.t. each input spectrogram channel -> (sector x mic) reference matrix, compar
 OAA's RayMicAttn maps aggregated over the same sectors.
 
   CUDA_VISIBLE_DEVICES=? DATA_MODULE=data_0422 R0422_SPLIT=off3 HF_HOME=... \
-    <echodiff_env>/bin/python viz_gradattr_eco.py --run-name eco_r8_fin
+    <echodiff_env>/bin/python viz/gradattr_eco.py --run-name eco_r8_fin
 """
-import os, json, math, argparse, importlib
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
+import os, json, math, argparse
 import numpy as np
 import torch
 from model.echodiffusion import EchoDiffusionDepth
 
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_0422"))
+from core.data import get_data_module
+_DM = get_data_module("data_0422")
 OUT = "comparison/mic_attribution"
 SECTORS = 16          # azimuth sectors (512/16 = 32-col blocks)
 MAX_BATCHES = 30

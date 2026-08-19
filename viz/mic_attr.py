@@ -9,13 +9,21 @@ Also prints a sanity table: each mic's yaw vs the azimuth peak of its occlusion/
 map (+ flatness ratios) so we can judge whether the maps are meaningful at all.
 
   DATA_MODULE=data_0422 R0422_SPLIT=off3 EVAL_BS=6 CUDA_VISIBLE_DEVICES=4 \
-    python3 viz_mic_attr.py --run-name oaa_r8_kany
+    python viz/mic_attr.py --run-name oaa_r8_kany
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, json, math, argparse
 import numpy as np
 import torch
 
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 from model.oaa import RayMicAttn, _yaw_rot_inv
 
 OUT = "comparison/mic_attribution"
@@ -62,15 +70,15 @@ def main():
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     device = torch.device("cuda")
-    rd = ev.resolve_run(a.run_name, ["out", "comparison"])
+    rd = resolve_run(a.run_name, ["out", "comparison"])
     ck = torch.load(os.path.join(rd, f"{a.ckpt}.pth"), map_location="cpu", weights_only=False)
-    model, dmode, nch, kind, poses = ev.build(ck["args"])
+    model, dmode, nch, kind, poses = build(ck["args"], _DM)
     model.load_state_dict(ck["state_dict"]); model.to(device).eval()
     md = ck["args"].get("max_depth", 10.0)
     N = nch
     store = {}
     patch_raymic(store)
-    ld = ev.loader("test", int(os.environ.get("EVAL_BS", "6")), False, 5, dmode)
+    ld = _DM.loader("test", int(os.environ.get("EVAL_BS", "6")), False, 5, dmode)
     H, W = 256, 512
     occ = torch.zeros(N, H, W); keep_err = torch.zeros(N, H, W); keep_cnt = torch.zeros(N, H, W)
     nimg = 0
@@ -102,8 +110,6 @@ def main():
     np.save(f"{OUT}/attention_{a.run_name}.npy", attn)
 
     # ---- verification: per-mic azimuth localisation ----
-    import importlib
-    _DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_0422"))
     P = poses or _DM.POSES[dmode]
     def circ_peak(m):                                   # azimuth (deg) of column-mass peak, ERP col->deg
         col = m.mean(0)                                 # (W,)

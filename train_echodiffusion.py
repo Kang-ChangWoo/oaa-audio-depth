@@ -8,14 +8,15 @@ EchoDiffusion consumes BOTH the STFT spec and the raw waveform, so it uses data_
 spec_wave_loader. Same masked-L1 recipe / cos-lat val as the other baselines; results saved under
 comparison/ so eval.py picks them up. Lower LR (1e-4) and small batch (SD-UNet is heavy).
 """
-import os, json, math, time, argparse, importlib, random
+import os, json, math, time, argparse, random
 from contextlib import nullcontext
 import numpy as np
 import torch
 
 from model.echodiffusion import EchoDiffusionDepth
 
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_0422"))
+from core.data import get_data_module
+_DM = get_data_module("data_0422")
 
 # fp32 by default: torch 1.13 bf16 autocast dies in ASPP's bilinear upsample
 # ("upsample_bilinear2d not implemented for BFloat16") and the checkpointed SD-UNet
@@ -27,9 +28,7 @@ def _amp():
     return torch.autocast("cuda", dtype=torch.bfloat16) if _BF16 else nullcontext()
 
 
-def cos_lat(h, device):
-    v = torch.arange(h, device=device, dtype=torch.float32)
-    return torch.cos((math.pi / 2) - (v + 0.5) / h * math.pi).clamp(min=1e-3)
+from core.metrics import cos_lat
 
 
 @torch.no_grad()
@@ -66,7 +65,7 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--patience", type=int, default=12)  # early stop: epochs without val improvement (eco always peaks ep14-16 then degrades monotonically; best.pth already saved)
     p.add_argument("--port", default="faithful", choices=["faithful", "enhanced"])
-    p.add_argument("--cide-cache", default="")   # cache_cide/*.npy — precomputed wav2vec2 embeddings (build_cide_cache.py)  # faithful=as in the original (128x128 + post-hoc upsample), enhanced=improved port (earlier round)
+    p.add_argument("--cide-cache", default="")   # cache_cide/*.npy — precomputed wav2vec2 embeddings (tools/build_cide_cache.py)  # faithful=as in the original (128x128 + post-hoc upsample), enhanced=improved port (earlier round)
     p.add_argument("--max-depth", type=float, default=10.0)
     p.add_argument("--out-dir", default="comparison")
     a = p.parse_args()

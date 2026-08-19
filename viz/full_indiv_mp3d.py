@@ -2,10 +2,16 @@
 
 Output: comparison/viz_all_hires/ch{N}/indiv/{model}/{scene}_{step:03d}.png
 model in {gt, rn, vit, es, bat, eco, oaa} — each file is the exact 256x512 depth map
-(turbo, 0..10m), no text/borders. Complements the strips rendered by viz_full_hires.py.
+(turbo, 0..10m), no text/borders. Complements the strips rendered by viz/full_hires.py.
 
-  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... DATA_MODULE=data_0422 python3 viz_full_indiv.py
+  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... DATA_MODULE=data_0422 python viz/full_indiv.py
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os
 os.environ.setdefault("DATA_MODULE", "data_mp3d")
 import numpy as np
@@ -17,9 +23,11 @@ from matplotlib import cm
 from PIL import Image
 
 import data_mp3d as dm
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison_mp3d", "viz_all")
 ECO_DIR = os.path.join(MAIN, "comparison_mp3d", "viz_all")
 MODES = {"r2": 2, "fb": 4, "r6": 6, "r8": 8}
@@ -49,7 +57,7 @@ for mode, nch in MODES.items():
         if not os.path.exists(f):
             print(f"[warn] no ckpt {path}", flush=True); continue
         ck = torch.load(f, map_location="cpu", weights_only=False)
-        net, _d, _n, kind, poses = ev.build(ck["args"])
+        net, _d, _n, kind, poses = build(ck["args"], _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         nets[key] = (net, kind, poses, ck["args"].get("max_depth", 10.0))
     eco_f = os.path.join(ECO_DIR, f"eco_{mode}.npy")

@@ -1,17 +1,24 @@
 """Progressive mic-drop curve for EchoDiffusion (isolated env, fp32).
 
-Same protocol as eval_micdrop.py (k of 8 spec channels zeroed, 3 fixed-seed draws per k).
+Same protocol as analysis/micdrop.py (k of 8 spec channels zeroed, 3 fixed-seed draws per k).
 The CIDE waveform pair corresponds to spec channels 0/1 (front L/R): a dropped front mic
 also zeroes its waveform channel — a dead mic yields neither spec nor wave.
 
   CUDA_VISIBLE_DEVICES=? DATA_MODULE=data_0422 R0422_SPLIT=off3 HF_HOME=... \
-    <echodiff_env>/bin/python eval_micdrop_eco.py --run-name eco_r8_fin
+    <echodiff_env>/bin/python analysis/micdrop_eco.py --run-name eco_r8_fin
 """
-import os, json, math, argparse, random, importlib
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
+import os, json, math, argparse, random
 import torch
 from model.echodiffusion import EchoDiffusionDepth
 
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_0422"))
+from core.data import get_data_module
+_DM = get_data_module("data_0422")
 DRAWS = 3
 
 
@@ -22,7 +29,7 @@ def cos_lat(h, device):
 
 def variants_for(nch):
     out = [("k0", None)]
-    rng = random.Random(0)                      # same seed as eval_micdrop.py -> same subsets
+    rng = random.Random(0)                      # same seed as analysis/micdrop.py -> same subsets
     for k in range(1, nch):
         for d in range(DRAWS):
             out.append((f"k{k}_d{d}", tuple(sorted(rng.sample(range(nch), k)))))

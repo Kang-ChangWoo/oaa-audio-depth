@@ -5,13 +5,22 @@ Perturbs a representative checkpoint without retraining to test whether pose/ear
   * pose_shuffle : roll view_poses by pair (audio fixed) — symmetric check
   * lr_swap     : swap L/R audio within a pair (ear labels fixed) — ear-identity check
 r2 has a single pair, so shuffle is undefined (lr_swap only).
-Run:  DATA_MODULE=data_0422 R0422_SPLIT=off3 python3 eval_controls.py --run-name oaa_r2_fin ... [--out controls.json]
+Run:  DATA_MODULE=data_0422 R0422_SPLIT=off3 python analysis/controls.py --run-name oaa_r2_fin ... [--out controls.json]
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, json, math, argparse
 import torch
 
-from eval import build, resolve_run, _DM, loader
-from train_oaa import cos_lat
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
+loader = _DM.loader
+from core.metrics import cos_lat
 
 
 def pair_blocks(nch):

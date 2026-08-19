@@ -17,27 +17,21 @@ This code base is anonymised for review; names, paths and dates in comments refe
 ## Layout
 
 ```
-model/oaa.py              OAAv2Depth — the model (all reported "Ours" numbers come from this class)
-model/batvision.py        BatVision U-Net baseline (RotDepth)
-model/pretrained.py       ImageNet-pretrained ResNet-50* / ViT-B/16* encoder–decoder baselines
-model/echoscan.py         EchoScan‡ (waveform 1D-conv encoder + ERP depth decoder)
-model/echodiffusion.py    EchoDiffusion (deterministic single-pass "econet"; isolated env, see below)
-model/echodiffusion_src/  vendored third-party sources for EchoDiffusion only (see NOTICE.md)
-model/beyond_i2d.py       Beyond-Image-to-Depth port (extra baseline, not in the tables)
-data_0422.py              Replica data module  (DATA_MODULE=data_0422)
-data_mp3d.py              Matterport3D data module (DATA_MODULE=data_mp3d, default)
-splits/mp3d/              Matterport3D scene-disjoint split keys (train/val/test)
-train_oaa.py              OAA trainer            train_batvision.py / train_baseline.py / train_echodiffusion.py
-eval.py                   test evaluation (all base-env models)   eval_echodiffusion.py (isolated env)
-eval_blind.py eval_eardrop.py eval_controls.py      input-cue ablations at inference
-eval_micdrop.py eval_micdrop_eco.py                 observation-subset / progressive mic-drop analysis
-eval_rot30.py eval_rot_jitter.py                    unseen receiver-heading generalisation
-viz_*.py                  qualitative figures, observation-attribution maps, trajectory sequences
-make_replica_tex.py make_mp3d_tex.py                result tables from compare.json
-build_spec_cache_*.py build_cide_cache.py           optional caches (speed only / EchoDiffusion CIDE)
-comparison/ comparison_mp3d/                        run directories (<run>/best.pth, last.pth, train_done.json)
-                                                    + compare*.json / fin_summary.json / FIN_SELECTION.md (not versioned)
+core/                     shared library: data-module selection, metrics, checkpoint rebuild, evaluate
+model/                    oaa.py (the model) + baselines (batvision, pretrained ResNet/ViT, echoscan, beyond_i2d,
+                          echodiffusion + vendored echodiffusion_src/, see NOTICE.md)
+data_0422.py  data_mp3d.py   Replica / Matterport3D data modules (DATA_MODULE=data_0422 | data_mp3d)
+splits/mp3d/              Matterport3D scene-disjoint split keys
+train_oaa.py  train_batvision.py  train_baseline.py  train_echodiffusion.py     trainers
+eval.py  eval_echodiffusion.py                                                 test evaluation -> compare*.json
+analysis/                 ablation / robustness evaluations (Tables 3-5, supp.)
+viz/                      figures (qualitative grids, observation attribution, trajectory sequences)
+tools/                    result tables, config export, optional caches
+configs/{replica,mp3d}/   exact args of every final run        comparison/ comparison_mp3d/  run dirs + result JSON
 ```
+See **SCRIPTS.md** for a per-script index (purpose, inputs/outputs, which table/figure it produces).
+Scripts depend only on `core/` and `model/`, never on each other; `analysis/`, `viz/`, `tools/` scripts
+chdir to the repo root on start so `comparison/...` paths resolve from anywhere.
 
 ## Environment
 
@@ -66,7 +60,7 @@ Input recipe (identical for all methods): waveform cropped to the 10 m round-tri
 nearest-resized to 256×512. Depth is nearest-resized to 256×512, clipped at 10 m and normalised.
 Channel order of the 8 observations: `[0L, 0R, 90L, 90R, 180L, 180R, 270L, 270R]`; modes
 `r2=[0L,0R]`, `cB=[0L,0R,90R,270L]` (4 obs.), `r6=[0,90,270]×[L,R]`, `r8` = all.
-Optional bit-identical spectrogram caches: `build_spec_cache_{replica,mp3d}.py` (+ `REPLICA_SPEC_CACHE` / `MP3D_SPEC_CACHE`).
+Optional bit-identical spectrogram caches: `tools/build_spec_cache_{replica,mp3d}.py` (+ `REPLICA_SPEC_CACHE` / `MP3D_SPEC_CACHE`).
 
 ## Train
 
@@ -94,11 +88,11 @@ DATA_MODULE=data_0422 <echodiff_env>/bin/python eval_echodiffusion.py --run-name
 Metrics are cos-latitude-weighted and per-image: MAE, RMSE, AbsRel, log10, δ1/δ2/δ3 (+ near/mid/far
 MAE bands, parameter count). `eval.py` rebuilds each model from the args stored in its checkpoint.
 
-Analyses: `eval_blind.py` / `eval_eardrop.py` (remove the pose / ear cue at inference),
-`eval_controls.py` (audio-shuffle / pose-shuffle / L-R swap controls), `eval_micdrop*.py`
-(observation subsets), `eval_rot30.py` / `eval_rot_jitter.py` (unseen receiver headings; needs the
-rotated test set), `viz_all.py` / `viz_full*.py` (qualitative grids), `viz_mic_attr*.py`
-(observation attribution), `viz_forward_seq.py` (trajectory sequences).
+Analyses: `analysis/blind.py` / `analysis/eardrop.py` (remove the pose / ear cue at inference),
+`analysis/controls.py` (audio-shuffle / pose-shuffle / L-R swap controls), `analysis/micdrop*.py`
+(observation subsets), `analysis/rot30.py` / `analysis/rot_jitter.py` (unseen receiver headings; needs the
+rotated test set), `viz/grid*.py` / `viz/full*.py` (qualitative grids), `viz/mic_attr*.py`
+(observation attribution), `viz/forward_seq.py` (trajectory sequences). Full index: SCRIPTS.md.
 
 ## Checkpoints
 

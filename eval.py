@@ -2,145 +2,32 @@
 checkpoint's saved args). EchoDiffusion is evaluated by eval_echodiffusion.py (isolated env).
 
 Metrics: cos-latitude-weighted, PER-IMAGE (batch-invariant) MAE / RMSE / AbsRel / log10 / delta1-3,
-plus near(<3m)/mid(3-6m)/far(>6m) band MAE.
+plus near(<3m)/mid(3-6m)/far(>6m) band MAE (core/metrics.py).
 
-Run:  DATA_MODULE=data_0422 python eval.py --run-name oaa_r8_fin bat_r8_fin [--ckpt best]
+Run:  DATA_MODULE=data_0422 python eval.py --run-name oaa_r8_fin bat_r8_fin [--ckpt best] [--compare-dir comparison]
 """
-import os, json, math, argparse
+import os, json, argparse
 import torch
 
-import importlib
-# data module selectable at runtime: DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_mp3d"))
-loader, wave_loader, IN_CH = _DM.loader, _DM.wave_loader, _DM.IN_CH
-from model.oaa import OAAv2Depth
-from model.batvision import RotDepth
-from model import PretrainedResNet, PretrainedViT, BeyondI2DDepth, EchoScanDepth
-from train_oaa import cos_lat
-
-KEYS = ["MAE", "MAE_plain", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
-BANDS = [("near<3", 0, 3), ("mid3-6", 3, 6), ("far>6", 6, 10)]
-
-# comparison baselines from train_baseline.py (ckpt args carry a "model" field)
-_BASE_SPEC = {"resnet": PretrainedResNet, "vit": PretrainedViT, "beyond": BeyondI2DDepth}
-
-
-_NV2MODE = {2: "r2", 4: "cB", 6: "r6", 8: "r8"}   # fallback when no mode stored (MP3D ckpts)
-
-
-def build(args):
-    """Reconstruct the model from a checkpoint's saved args.
-
-    Returns (model, dmode, nch, kind, poses): kind "spec"|"wave"; dmode the loader mode; nch the
-    channels the model expects; poses the OAA view_poses for this mode (None otherwise).
-    """
-    name = args.get("model")                                                # train_baseline.py ckpts
-    poses_for = lambda md: getattr(_DM, "POSES", {}).get(md)
-    if name in _BASE_SPEC:
-        mode = args.get("mode") or _NV2MODE[args.get("in_ch", 4)]
-        in_ch = IN_CH[mode]
-        m = _BASE_SPEC[name](in_ch=in_ch, pretrained=False) if name in ("resnet", "vit") \
-            else BeyondI2DDepth(in_ch=in_ch, pretrained_material=False)
-        return m, mode, in_ch, "spec", None
-    if name == "echoscan":
-        mode = args.get("mode", "r2")
-        return EchoScanDepth(in_ch=IN_CH[mode], fs=args.get("fs", 48000)), mode, IN_CH[mode], "wave", None
-    if "feat_c" in args or ("mode" in args and "model" not in args):         # batvision
-        mode = args.get("mode", "cB")
-        m = RotDepth(in_ch=IN_CH[mode], feat_c=args.get("feat_c", 32), ngf=args.get("ngf", 64))
-        return m, mode, IN_CH[mode], "spec", None
-    nv = args.get("nviews", 4)                                              # oaa
-    dmode = args.get("data_mode") or _NV2MODE[nv]
-    if args.get("data_module") and args["data_module"] != _DM.__name__:      # checkpoints that recorded their dataset
-        raise RuntimeError(f"checkpoint was trained with DATA_MODULE={args['data_module']} but {_DM.__name__} is loaded")
-    # The released model is the full-resolution multi-scale OAA with AdaLN conditioning; refuse checkpoints
-    # trained with research-only options that this code base no longer implements.
-    for k, want in (("cond_mode", "adaln"), ("full_res_enc", True), ("multi_scale_lift", True)):
-        assert args.get(k, want) == want, f"unsupported checkpoint: {k}={args.get(k)}"
-    for k in ("rope", "full_res_gated"):
-        assert not args.get(k), f"unsupported checkpoint option: {k}"
-    assert (args.get("ctx_mode") or "none") == "none", "unsupported checkpoint option: ctx_mode"
-    # NOTE: checkpoints without `rounds_wired` were trained before rounds/lift reached the model; they are
-    # rounds=2 / 16x32 regardless of the stored args (load_state_dict(strict) guards the mismatch).
-    wired = args.get("rounds_wired", False)
-    m = OAAv2Depth(C=args.get("dim", 256), nviews=nv, dec_deep=args.get("dec_deep", True),
-                   stem_stride1=args.get("stem_stride1", False) or False, max_depth=args.get("max_depth", 10.0),
-                   rounds=args.get("rounds", 2) if wired else 2,
-                   lh=args.get("lift_h", 16) if wired else 16, lw=args.get("lift_w", 32) if wired else 32,
-                   no_pose_emb=args.get("no_pose_emb", False) or False, no_ray_emb=args.get("no_ray_emb", False) or False,
-                   no_geo_bias=args.get("no_geo_bias", False) or False, no_tf_pe=args.get("no_tf_pe", False) or False,
-                   no_cross=args.get("no_cross", False) or False)
-    poses = poses_for(dmode)
-    if args.get("yaw_flip") and poses:
-        poses = [(-y, e) for (y, e) in poses]
-    if args.get("pose_blind"):
-        poses = [(0.0, 1.0)] * nv
-    elif args.get("ear_blind") and poses:
-        poses = [(y, 1.0) for (y, _) in poses]
-    return m, dmode, nv, "spec", poses
-
-
-def resolve_run(run, search_dirs):
-    """Find <dir>/<run>/ across search_dirs (ours in out/, baselines in comparison/)."""
-    for d in search_dirs:
-        if os.path.isdir(os.path.join(d, run)):
-            return os.path.join(d, run)
-    raise FileNotFoundError(f"run '{run}' not found under {search_dirs}")
-
-
-@torch.no_grad()
-def evaluate(run_dir, ckpt, device, max_depth=10.0):
-    ck = torch.load(os.path.join(run_dir, f"{ckpt}.pth"), map_location="cpu", weights_only=False)
-    model, dmode, nch, kind, poses = build(ck["args"])
-    model.load_state_dict(ck["state_dict"]); model.to(device).eval()
-    params_m = sum(p.numel() for p in model.parameters()) / 1e6
-    max_depth = ck["args"].get("max_depth", max_depth)
-    _bs = int(os.environ.get("EVAL_BS", "32"))   # lower (EVAL_BS=4) to fit eval on a shared/contended GPU
-    ld = wave_loader("test", _bs, False, 5, dmode) if kind == "wave" else loader("test", _bs, False, 5, dmode)
-    wlat = cos_lat(256, device).view(1, 1, 256, 1)
-    acc = {k: 0.0 for k in KEYS}; n = 0
-    be = {b[0]: [0.0, 0.0] for b in BANDS}
-    for b in ld:
-        x = b["wave"][:, :nch].to(device) if kind == "wave" else b["spec"][:, :nch].to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            D = (model(x, view_poses=poses) if poses is not None else model(x)).float() * max_depth
-        gt = b["depth"].to(device) * max_depth; mask = b["mask"].to(device)
-        w = wlat * mask; B = D.shape[0]
-        pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
-        acc["MAE"] += float(pi((D - gt).abs() * w, w).mean()) * B
-        acc["MAE_plain"] += float(pi((D - gt).abs() * mask, mask).mean()) * B   # unweighted (mask only)
-        acc["RMSE"] += float(pi(((D - gt) ** 2) * w, w).clamp(min=0).sqrt().mean()) * B
-        acc["AbsRel"] += float(pi((D - gt).abs() / gt.clamp(min=0.1) * w, w).mean()) * B
-        acc["log10"] += float(pi((torch.log10(D.clamp(min=0.1)) - torch.log10(gt.clamp(min=0.1))).abs() * w, w).mean()) * B
-        rt = torch.maximum(D.clamp(min=0.1) / gt.clamp(min=0.1), gt.clamp(min=0.1) / D.clamp(min=0.1))
-        acc["delta1"] += float(pi((rt < 1.25).float() * w, w).mean()) * B
-        acc["delta2"] += float(pi((rt < 1.25 ** 2).float() * w, w).mean()) * B
-        acc["delta3"] += float(pi((rt < 1.25 ** 3).float() * w, w).mean()) * B
-        n += B
-        err = (D - gt).abs()
-        for nm, lo, hi in BANDS:
-            bm = mask * (gt >= lo) * (gt < hi)
-            be[nm][0] += (err * bm).sum().item(); be[nm][1] += bm.sum().item()
-    out = {k: acc[k] / n for k in KEYS}
-    for nm in be:
-        out[nm] = be[nm][0] / max(be[nm][1], 1e-6)
-    out["Params(M)"] = params_m
-    return out
+from core.data import get_data_module
+from core.ckpt import resolve_run
+from core.evaluate import evaluate
+from core.metrics import KEYS, BANDS
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-name", nargs="+", required=True)
-    ap.add_argument("--out-dir", default="out")            # "ours" runs (OAA/BatVision)
-    ap.add_argument("--compare-dir", default="comparison")  # baseline runs + summary output
+    ap.add_argument("--out-dir", default="out")             # where our own runs are written
+    ap.add_argument("--compare-dir", default="comparison")  # baseline runs + summary output (compare.json)
     ap.add_argument("--ckpt", default="best", choices=["best", "last"])
     a = ap.parse_args()
+    DM = get_data_module()
     device = torch.device("cuda")
-    search = [a.out_dir, a.compare_dir]
     res = {}
     for r in a.run_name:
         try:
-            res[r] = evaluate(resolve_run(r, search), a.ckpt, device)
+            res[r] = evaluate(resolve_run(r, [a.out_dir, a.compare_dir]), DM, a.ckpt, device)
         except Exception as e:
             print(f"[skip {r}] {e}", flush=True)
     cols = KEYS + [b[0] for b in BANDS] + ["Params(M)"]
@@ -155,7 +42,7 @@ def main():
         except Exception: merged = {}
     merged.update(res)                      # merge: keep existing rows, overwrite re-evaluated ones
     json.dump(merged, open(cj, "w"), indent=2)
-    print(f"\n[saved] {os.path.join(a.compare_dir, 'compare.json')}", flush=True)
+    print(f"\n[saved] {cj}", flush=True)
 
 
 if __name__ == "__main__":

@@ -11,20 +11,20 @@ Models (forward input differs):
 EchoDiffusion is trained separately in its isolated env (needs spec+wave+SD weights).
 
 Run:
-  python3 train_baseline.py --model resnet   --run-name rn_r8 --mode r8
-  python3 train_baseline.py --model vit      --run-name vit_r2 --mode r2
-  python3 train_baseline.py --model beyond   --run-name byd_r4 --mode cB
-  python3 train_baseline.py --model echoscan --run-name es_s0
+  python train_baseline.py --model resnet   --run-name rn_r8 --mode r8
+  python train_baseline.py --model vit      --run-name vit_r2 --mode r2
+  python train_baseline.py --model beyond   --run-name byd_r4 --mode cB
+  python train_baseline.py --model echoscan --run-name es_s0
 """
-import os, json, math, time, argparse, importlib
+import os, json, math, time, argparse
 import numpy as np
 import torch
 
-# data module selectable at runtime: DATA_MODULE=data (MP3D, default) | data_0422 (Replica)
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_mp3d"))
+from core.data import get_data_module
+from core.metrics import cos_lat
+_DM = get_data_module()          # DATA_MODULE=data_mp3d (default) | data_0422
 loader, wave_loader, IN_CH = _DM.loader, _DM.wave_loader, _DM.IN_CH
 from model import PretrainedResNet, PretrainedViT, BeyondI2DDepth, EchoScanDepth
-from train_oaa import cos_lat
 
 SPEC_MODELS = {"resnet": PretrainedResNet, "vit": PretrainedViT, "beyond": BeyondI2DDepth}
 WAVE_MODELS = {"echoscan": EchoScanDepth}

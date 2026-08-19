@@ -5,13 +5,22 @@ Unlike ear-blind (pose sign lied), this physically drops half the microphones â€
 vdrop-trained models saw during training, so the comparison is fair at inference.
 
   DATA_MODULE=data_0422 R0422_SPLIT=off3 EVAL_BS=6 CUDA_VISIBLE_DEVICES=7 \
-    python3 eval_eardrop.py --run-name oaa_r8_kany oaa_r8_vw_rd3
+    python analysis/eardrop.py --run-name oaa_r8_kany oaa_r8_vw_rd3
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, json, argparse
 import torch
 
-import eval as ev
-from train_oaa import cos_lat
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+from core.metrics import KEYS, BANDS
+_DM = get_data_module()
+from core.metrics import cos_lat
 
 VARIANTS = {"normal": None, "L-only": [1, 3, 5, 7], "R-only": [0, 2, 4, 6]}   # indices zeroed
 
@@ -19,13 +28,13 @@ VARIANTS = {"normal": None, "L-only": [1, 3, 5, 7], "R-only": [0, 2, 4, 6]}   # 
 @torch.no_grad()
 def run_eval(run_dir, ckpt, device, zero_idx):
     ck = torch.load(os.path.join(run_dir, f"{ckpt}.pth"), map_location="cpu", weights_only=False)
-    model, dmode, nch, kind, poses = ev.build(ck["args"])
+    model, dmode, nch, kind, poses = build(ck["args"], _DM)
     model.load_state_dict(ck["state_dict"]); model.to(device).eval()
     max_depth = ck["args"].get("max_depth", 10.0)
-    ld = ev.loader("test", int(os.environ.get("EVAL_BS", "8")), False, 5, dmode)
+    ld = _DM.loader("test", int(os.environ.get("EVAL_BS", "8")), False, 5, dmode)
     wlat = cos_lat(256, device).view(1, 1, 256, 1)
-    acc = {k: 0.0 for k in ev.KEYS}; n = 0
-    be = {b[0]: [0.0, 0.0] for b in ev.BANDS}
+    acc = {k: 0.0 for k in KEYS}; n = 0
+    be = {b[0]: [0.0, 0.0] for b in BANDS}
     for b in ld:
         x = b["spec"][:, :nch].to(device)
         if zero_idx is not None:
@@ -45,10 +54,10 @@ def run_eval(run_dir, ckpt, device, zero_idx):
             acc[dk] += float(pi((rt < 1.25 ** i).float() * w, w).mean()) * B
         n += B
         err = (D - gt).abs()
-        for nm, lo, hi in ev.BANDS:
+        for nm, lo, hi in BANDS:
             bm = mask * (gt >= lo) * (gt < hi)
             be[nm][0] += (err * bm).sum().item(); be[nm][1] += bm.sum().item()
-    out = {k: acc[k] / n for k in ev.KEYS}
+    out = {k: acc[k] / n for k in KEYS}
     for nm in be:
         out[nm] = be[nm][0] / max(be[nm][1], 1e-6)
     return out
@@ -68,7 +77,7 @@ def main():
     show = ["MAE", "RMSE", "AbsRel", "delta1", "near<3", "mid3-6", "far>6"]
     print(f"{'run':18}{'variant':9}" + "".join(f"{k:>9}" for k in show))
     for run in a.run_name:
-        rd = ev.resolve_run(run, ["out", "comparison"])
+        rd = resolve_run(run, ["out", "comparison"])
         for tag, idx in VARIANTS.items():
             out = run_eval(rd, a.ckpt, device, idx)
             saved.setdefault(run, {})[tag] = out

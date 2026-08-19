@@ -1,23 +1,31 @@
-"""Qualitative grid for the MP3D comparison table — MP3D version of viz_all.py (fin selection as of 2026-07-27).
+"""Qualitative grid for the MP3D comparison table — MP3D version of viz/grid.py (fin selection as of 2026-07-27).
 
 Columns (paper order): GT | ResNet | ViT | Beyond(blank) | EchoScan | BatVision | EchoDiffusion | OAA.
 Rows: 2 samples from 3 held-out test scenes. One PNG per channel mode -> comparison_mp3d/viz_all/.
 
 Stage 1 (this script, base env): predict with every base-env _fin checkpoint, save npy + GT.
-Stage 2 (viz_eco_mp3d.py, isolated env): EchoDiffusion(wstd fin) predictions -> npy.
+Stage 2 (viz/eco_mp3d.py, isolated env): EchoDiffusion(wstd fin) predictions -> npy.
 Stage 3 (this script --compose): assemble PNGs; missing npy (byd) renders blank.
 
-  DATA_MODULE=data_mp3d python3 viz_all_mp3d.py [--compose]
+  DATA_MODULE=data_mp3d python viz/grid_mp3d.py [--compose]
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, argparse
 os.environ.setdefault("DATA_MODULE", "data_mp3d")
 import numpy as np
 import torch
 
 import data_mp3d as dm
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison_mp3d", "viz_all")
 os.makedirs(OUT, exist_ok=True)
 
@@ -32,7 +40,7 @@ for m in MODES:
     CKPTS[("byd", m)] = None
     CKPTS[("es", m)] = f"comparison_mp3d/es_{m}_fin"
     CKPTS[("bat", m)] = f"comparison_mp3d/bat_{m}_fin"
-    CKPTS[("eco", m)] = "EXTERNAL"                      # viz_eco_mp3d.py (isolated env)
+    CKPTS[("eco", m)] = "EXTERNAL"                      # viz/eco_mp3d.py (isolated env)
     CKPTS[("oaa", m)] = f"comparison_mp3d/oaa_{m}_fin"
 
 
@@ -50,7 +58,7 @@ def predict():
             print(f"[skip] {model}/{mode}: no ckpt at {path}", flush=True)
             continue
         ck = torch.load(f, map_location="cpu", weights_only=False)
-        net, dmode, nch, kind, poses = ev.build(ck["args"])
+        net, dmode, nch, kind, poses = build(ck["args"], _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         md = ck["args"].get("max_depth", 10.0)
         with torch.no_grad():

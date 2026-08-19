@@ -94,7 +94,7 @@ def _load_wave(scene, front, mode, frames=WINDOW):
     return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
-_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "")   # output of build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
+_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "")   # output of tools/build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
 
 
 def _spec1(scene, step):

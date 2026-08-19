@@ -7,9 +7,15 @@ slots by fixed random patterns (deterministic, listed below). L/R of a mic alway
 OAA is evaluated twice per batch: told the TRUE per-mic poses vs the nominal (blind) poses —
 isolates whether pose conditioning actually exploits rig geometry. eco is inherently blind.
 
-  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=5 python3 eval_rot_jitter.py \
+  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=5 python analysis/rot_jitter.py \
       --model oaa --ckpt comparison/oaa_r8_fin/best.pth
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, math, json, argparse
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -103,8 +109,10 @@ def main():
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
     args = ck["args"]; md = args.get("max_depth", 10.0)
     if a.model in ("oaa", "bat"):
-        import eval as ev
-        net, mode, *_ = ev.build(args)
+        from core.data import get_data_module
+        from core.ckpt import build
+        _DM = get_data_module()
+        net, mode, *_ = build(args, _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         wave_ch = 0
     else:

@@ -11,20 +11,17 @@ Run (Replica 8 obs.):  DATA_MODULE=data_0422 python train_oaa.py --run-name oaa_
                          --lr 5e-4 --warmup-ep 4 --epochs 40 --batch-size 3 --accum 11 --subset-aug --vdrop-kmax 4
 See configs/ for the exact per-run settings behind every reported number.
 """
-import os, json, math, time, argparse, copy, importlib, random
+import os, json, math, time, argparse, copy, random
 import torch.distributed as dist
 import numpy as np
 import torch
 
-# data module selectable at runtime: DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
-_DM = importlib.import_module(os.environ.get("DATA_MODULE", "data_mp3d"))
-loader = _DM.loader
+from core.data import get_data_module
+from core.metrics import cos_lat
 from model.oaa import OAAv2Depth
 
-
-def cos_lat(h, device):
-    v = torch.arange(h, device=device, dtype=torch.float32)
-    return torch.cos((math.pi / 2) - (v + 0.5) / h * math.pi).clamp(min=1e-3)
+_DM = get_data_module()          # DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
+loader = _DM.loader
 
 
 @torch.no_grad()

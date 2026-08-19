@@ -1,9 +1,15 @@
 """EchoDiffusion predictions for the viz_all grid — run in the ISOLATED env (torch 1.13/ldm).
 
   CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... DATA_MODULE=data_0422 HF_HOME=<hf_cache> \
-    <echodiff_env>/bin/python viz_eco.py
-Saves comparison/viz_all/pred_eco_{mode}_{si}.npy; viz_all.py --compose picks them up.
+    <echodiff_env>/bin/python viz/eco.py
+Saves comparison/viz_all/pred_eco_{mode}_{si}.npy; viz/grid.py --compose picks them up.
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os
 os.environ.setdefault("DATA_MODULE", "data_0422")
 import numpy as np
@@ -13,7 +19,7 @@ import data_0422 as dm
 dm.ROOT = os.environ.get("REPLICA_ROOT", dm.ROOT)
 from model.echodiffusion import EchoDiffusionDepth
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison", "viz_all")
 os.makedirs(OUT, exist_ok=True)
 SAMPLES = [("apartment_2", 0), ("apartment_2", 220),

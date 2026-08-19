@@ -4,11 +4,17 @@ Columns (paper order): GT | ResNet | ViT | Beyond(blank) | EchoScan | BatVision 
 Rows: 2 samples from each held-out test scene. One PNG per channel mode -> comparison/viz_all/.
 
 Stage 1 (this script, base env): predict with every *base-env* _fin checkpoint, save npy + GT.
-Stage 2 (viz_eco.py, isolated env): EchoDiffusion predictions -> npy.
+Stage 2 (viz/eco.py, isolated env): EchoDiffusion predictions -> npy.
 Stage 3 (this script --compose): assemble PNGs; missing npy (byd, eco-not-yet) renders blank.
 
-  REPLICA_ROOT=... DATA_MODULE=data_0422 python3 viz_all.py [--compose]
+  REPLICA_ROOT=... DATA_MODULE=data_0422 python viz/grid.py [--compose]
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, sys, argparse
 os.environ.setdefault("DATA_MODULE", "data_0422")
 import numpy as np
@@ -16,9 +22,11 @@ import torch
 
 import data_0422 as dm
 dm.ROOT = os.environ.get("REPLICA_ROOT", dm.ROOT)
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison", "viz_all")
 os.makedirs(OUT, exist_ok=True)
 
@@ -34,7 +42,7 @@ for m in MODES:
     CKPTS[("byd", m)] = None
     CKPTS[("es", m)] = f"comparison/es_{m}_fin"
     CKPTS[("bat", m)] = f"comparison/bat_{m}_fin"
-    CKPTS[("eco", m)] = "EXTERNAL"                      # produced by viz_eco.py in the isolated env
+    CKPTS[("eco", m)] = "EXTERNAL"                      # produced by viz/eco.py in the isolated env
 CKPTS[("oaa", "r2")] = "comparison/oaa_r2_fin"
 CKPTS[("oaa", "fb")] = "comparison/oaa_fb_fin"
 CKPTS[("oaa", "r6")] = "comparison/deprecated/oaa_r6_bmax"   # temporary (fe pending)
@@ -56,7 +64,7 @@ def predict():
             print(f"[skip] {model}/{mode}: no ckpt at {path}", flush=True)
             continue
         ck = torch.load(f, map_location="cpu", weights_only=False)
-        net, dmode, nch, kind, poses = ev.build(ck["args"])
+        net, dmode, nch, kind, poses = build(ck["args"], _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         md = ck["args"].get("max_depth", 10.0)
         with torch.no_grad():

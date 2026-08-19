@@ -6,11 +6,17 @@ each), so this measures how the fin models behave when the whole rig is rotated 
 90-degree-multiple fronts seen in training. Spec/depth/metric recipe identical to
 data_0422 + eval.py (cos-lat weighted, per-image).
 
-  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=5 python3 eval_rot30.py \
+  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=5 python analysis/rot30.py \
       --model oaa --ckpt comparison/oaa_r8_fin/best.pth
-  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=6 HF_HOME=... echodiff_env/bin/python eval_rot30.py \
+  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=6 HF_HOME=... echodiff_env/bin/python analysis/rot30.py \
       --model eco --ckpt comparison/eco_r8_fin/best.pth
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, math, json, argparse
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -99,8 +105,10 @@ def main():
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
     args = ck["args"]; md = args.get("max_depth", 10.0)
     if a.model in ("oaa", "bat"):
-        import eval as ev
-        net, mode, _n, kind, poses = ev.build(args)
+        from core.data import get_data_module
+        from core.ckpt import build
+        _DM = get_data_module()
+        net, mode, _n, kind, poses = build(args, _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         wave_ch = 0
 

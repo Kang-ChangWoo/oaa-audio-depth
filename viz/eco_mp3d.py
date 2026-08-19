@@ -1,9 +1,15 @@
 """EchoDiffusion(wstd fin) predictions for the MP3D viz_all grid — ISOLATED env (torch 1.13/ldm).
 
   CUDA_VISIBLE_DEVICES=? DATA_MODULE=data_mp3d HF_HOME=<hf_cache> \
-    <echodiff_env>/bin/python viz_eco_mp3d.py
-Saves comparison_mp3d/viz_all/pred_eco_{mode}_{si}.npy; viz_all_mp3d.py --compose picks them up.
+    <echodiff_env>/bin/python viz/eco_mp3d.py
+Saves comparison_mp3d/viz_all/pred_eco_{mode}_{si}.npy; viz/grid_mp3d.py --compose picks them up.
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os
 os.environ.setdefault("DATA_MODULE", "data_mp3d")
 import numpy as np
@@ -12,7 +18,7 @@ import torch
 import data_mp3d as dm
 from model.echodiffusion import EchoDiffusionDepth
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison_mp3d", "viz_all")
 os.makedirs(OUT, exist_ok=True)
 SAMPLES = [("8WUmhLawc2A", 0), ("8WUmhLawc2A", 220),

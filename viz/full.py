@@ -3,11 +3,17 @@
 Output: comparison/viz_all/ch{2,4,6,8}/{scene}_{step:03d}.png — a 1x8 strip
   GT | ResNet | ViT | Beyond(blank) | EchoScan | BatVision | EchoDiffusion | OAA(ours)
 with the scene/step in the title. EchoDiffusion comes from the eco_{mode}.npy memmaps
-written by viz_eco_full.py (isolated env); blank if absent. OAA 6/8ch uses the bmax
+written by viz/eco_full.py (isolated env); blank if absent. OAA 6/8ch uses the bmax
 stand-in until the fe runs finish (swap CKPTS and re-run).
 
-  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... DATA_MODULE=data_0422 python3 viz_full.py
+  CUDA_VISIBLE_DEVICES=? REPLICA_ROOT=... DATA_MODULE=data_0422 python viz/full.py
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os
 os.environ.setdefault("DATA_MODULE", "data_0422")
 import numpy as np
@@ -20,9 +26,11 @@ from PIL import Image
 
 import data_0422 as dm
 dm.ROOT = os.environ.get("REPLICA_ROOT", dm.ROOT)
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 
-MAIN = os.path.dirname(os.path.abspath(__file__))
+MAIN = ROOT
 OUT = os.path.join(MAIN, "comparison", "viz_all")
 MODES = {"r2": 2, "fb": 4, "r6": 6, "r8": 8}
 CKPTS = {m: {"bat": f"comparison/bat_{m}_fin"} for m in MODES}
@@ -48,7 +56,7 @@ for mode, nch in MODES.items():
         if not os.path.exists(f):
             print(f"[warn] no ckpt {path}", flush=True); continue
         ck = torch.load(f, map_location="cpu", weights_only=False)
-        net, _dm_, _nch_, kind, poses = ev.build(ck["args"])
+        net, _dm_, _nch_, kind, poses = build(ck["args"], _DM)
         net.load_state_dict(ck["state_dict"]); net.to(device).eval()
         nets[key] = (net, kind, poses, ck["args"].get("max_depth", 10.0))
     eco_f = f"{OUT}/eco_{mode}.npy"

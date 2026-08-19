@@ -9,8 +9,14 @@ Each step's 8 channels are assembled in the training order
 8-channel model (comparison/oaa_r8_fin). Output: side-by-side [RGB | Pred]
 PNGs at native resolution under test_for_audio_tof/supple/<scene>/<seq>/.
 
-  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=? python3 viz_forward_seq.py [--gt]
+  DATA_MODULE=data_0422 CUDA_VISIBLE_DEVICES=? python viz/forward_seq.py [--gt]
 """
+# --- repo-root bootstrap: importable root modules (eval, data_*, model) + relative comparison/ paths
+import os as _os, sys as _sys
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if ROOT not in _sys.path:
+    _sys.path.insert(0, ROOT)
+_os.chdir(ROOT)
 import os, sys, glob, argparse
 os.environ.setdefault("DATA_MODULE", "data_0422")
 import numpy as np
@@ -22,9 +28,10 @@ matplotlib.use("Agg")
 from matplotlib import cm
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data_0422 as dm
-import eval as ev
+from core.data import get_data_module
+from core.ckpt import build, resolve_run
+_DM = get_data_module()
 
 SEQ_ROOT = os.environ.get("FORWARD_SEQ_ROOT", "data/replica_0422_forward_seq")
 OUT_ROOT = os.environ.get("FORWARD_SEQ_OUT", "supple")
@@ -67,7 +74,7 @@ def main():
     a = ap.parse_args()
     device = torch.device("cuda")
     ck = torch.load(CKPT, map_location="cpu", weights_only=False)
-    model, dmode, nch, kind, poses = ev.build(ck["args"])
+    model, dmode, nch, kind, poses = build(ck["args"], _DM)
     model.load_state_dict(ck["state_dict"]); model.to(device).eval()
     md = ck["args"].get("max_depth", 10.0)
     n_out = 0
