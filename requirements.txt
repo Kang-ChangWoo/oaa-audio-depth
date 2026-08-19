@@ -1,0 +1,11 @@
+# Main environment (OAA, BatVision, ResNet/ViT, EchoScan, BeyondI2D; training + evaluation + visualisation)
+# Tested with Python 3.10, CUDA 12.8.
+torch==2.8.0
+torchvision==0.23.0
+numpy>=1.26
+scipy>=1.11
+soundfile>=0.12
+matplotlib>=3.8
+Pillow>=10
+imageio>=2.31
+tqdm

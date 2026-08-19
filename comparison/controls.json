@@ -1,0 +1,150 @@
+{
+  "oaa_r2_fin": {
+    "none": {
+      "MAE": 0.2894,
+      "MAE_plain": 0.2194,
+      "RMSE": 0.5587,
+      "AbsRel": 0.1567,
+      "log10": 0.0669,
+      "delta1": 0.797,
+      "delta2": 0.9184,
+      "delta3": 0.9607
+    },
+    "lr_swap": {
+      "MAE": 0.7415,
+      "MAE_plain": 0.5413,
+      "RMSE": 1.2101,
+      "AbsRel": 0.6061,
+      "log10": 0.184,
+      "delta1": 0.5383,
+      "delta2": 0.685,
+      "delta3": 0.7765
+    }
+  },
+  "oaa_fb_fin": {
+    "none": {
+      "MAE": 0.2596,
+      "MAE_plain": 0.1991,
+      "RMSE": 0.5143,
+      "AbsRel": 0.1404,
+      "log10": 0.0605,
+      "delta1": 0.8263,
+      "delta2": 0.9318,
+      "delta3": 0.9674
+    },
+    "lr_swap": {
+      "MAE": 0.7532,
+      "MAE_plain": 0.5487,
+      "RMSE": 1.2342,
+      "AbsRel": 0.6192,
+      "log10": 0.1852,
+      "delta1": 0.5449,
+      "delta2": 0.6833,
+      "delta3": 0.7713
+    },
+    "audio_shuffle": {
+      "MAE": 1.0728,
+      "MAE_plain": 0.7789,
+      "RMSE": 1.6068,
+      "AbsRel": 0.9954,
+      "log10": 0.2761,
+      "delta1": 0.3799,
+      "delta2": 0.5154,
+      "delta3": 0.6255
+    },
+    "pose_shuffle": {
+      "MAE": 1.0728,
+      "MAE_plain": 0.7789,
+      "RMSE": 1.6068,
+      "AbsRel": 0.9954,
+      "log10": 0.2761,
+      "delta1": 0.3799,
+      "delta2": 0.5154,
+      "delta3": 0.6255
+    }
+  },
+  "oaa_r6_fin": {
+    "none": {
+      "MAE": 0.2384,
+      "MAE_plain": 0.1843,
+      "RMSE": 0.4809,
+      "AbsRel": 0.1296,
+      "log10": 0.0552,
+      "delta1": 0.8471,
+      "delta2": 0.9402,
+      "delta3": 0.9721
+    },
+    "lr_swap": {
+      "MAE": 1.049,
+      "MAE_plain": 0.7626,
+      "RMSE": 1.5698,
+      "AbsRel": 0.9744,
+      "log10": 0.2702,
+      "delta1": 0.39,
+      "delta2": 0.5266,
+      "delta3": 0.6351
+    },
+    "audio_shuffle": {
+      "MAE": 0.921,
+      "MAE_plain": 0.6723,
+      "RMSE": 1.414,
+      "AbsRel": 0.7778,
+      "log10": 0.2324,
+      "delta1": 0.4219,
+      "delta2": 0.5734,
+      "delta3": 0.6919
+    },
+    "pose_shuffle": {
+      "MAE": 0.9027,
+      "MAE_plain": 0.6597,
+      "RMSE": 1.386,
+      "AbsRel": 0.7593,
+      "log10": 0.229,
+      "delta1": 0.426,
+      "delta2": 0.5795,
+      "delta3": 0.6961
+    }
+  },
+  "oaa_r8_fin": {
+    "none": {
+      "MAE": 0.2668,
+      "MAE_plain": 0.2058,
+      "RMSE": 0.5201,
+      "AbsRel": 0.1509,
+      "log10": 0.0626,
+      "delta1": 0.8154,
+      "delta2": 0.9271,
+      "delta3": 0.9657
+    },
+    "lr_swap": {
+      "MAE": 1.0213,
+      "MAE_plain": 0.747,
+      "RMSE": 1.5317,
+      "AbsRel": 0.936,
+      "log10": 0.2656,
+      "delta1": 0.3934,
+      "delta2": 0.5331,
+      "delta3": 0.6447
+    },
+    "audio_shuffle": {
+      "MAE": 0.92,
+      "MAE_plain": 0.6732,
+      "RMSE": 1.4213,
+      "AbsRel": 0.7426,
+      "log10": 0.2301,
+      "delta1": 0.4173,
+      "delta2": 0.5728,
+      "delta3": 0.6938
+    },
+    "pose_shuffle": {
+      "MAE": 0.8918,
+      "MAE_plain": 0.6547,
+      "RMSE": 1.3811,
+      "AbsRel": 0.7355,
+      "log10": 0.2256,
+      "delta1": 0.4271,
+      "delta2": 0.5825,
+      "delta3": 0.7027
+    }
+  }
+}

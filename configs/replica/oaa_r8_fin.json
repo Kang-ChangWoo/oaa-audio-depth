@@ -1,0 +1,30 @@
+{
+ "run": "oaa_r8_fin",
+ "dataset": "replica",
+ "DATA_MODULE": "data_0422",
+ "best_val_mae_m": 0.2658020324646815,
+ "epochs_trained": 40,
+ "args": {
+  "nviews": 8,
+  "cond_mode": "adaln",
+  "dim": 256,
+  "full_res": true,
+  "full_res_enc": true,
+  "dec_deep": true,
+  "multi_scale_lift": true,
+  "ctx_mode": "none",
+  "data_mode": "r8",
+  "accum": 11,
+  "lr": 0.0005,
+  "wd": 0.0001,
+  "mirror_aug": false,
+  "subset_aug": true,
+  "vdrop_p": 0.5,
+  "vdrop_kmax": 4,
+  "warmup_ep": 8.0,
+  "epochs": 40,
+  "batch_size": 3,
+  "seed": 0,
+  "max_depth": 10.0
+ }
+}

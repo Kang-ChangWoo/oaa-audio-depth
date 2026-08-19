@@ -1,0 +1,20 @@
+{
+ "run": "es_fb_fin",
+ "dataset": "replica",
+ "DATA_MODULE": "data_0422",
+ "best_val_mae_m": 0.3716669177630316,
+ "epochs_trained": 40,
+ "args": {
+  "model": "echoscan",
+  "mode": "fb",
+  "lr": 0.001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 64,
+  "seed": 1,
+  "max_depth": 10.0,
+  "in_ch": 4,
+  "params_M": 41.256,
+  "trainable_M": 41.256
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "run": "eco_r2_fin",
+ "dataset": "replica",
+ "DATA_MODULE": "data_0422",
+ "best_val_mae_m": 0.3342783466187451,
+ "epochs_trained": 40,
+ "args": {
+  "mode": "r2",
+  "wave_mode": "std",
+  "wave_window": 48000,
+  "lr": 0.0001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 16,
+  "seed": 0,
+  "max_depth": 10.0,
+  "model": "echodiffusion",
+  "amp": "bf16"
+ }
+}

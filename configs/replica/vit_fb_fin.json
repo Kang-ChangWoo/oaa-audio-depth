@@ -1,0 +1,20 @@
+{
+ "run": "vit_fb_fin",
+ "dataset": "replica",
+ "DATA_MODULE": "data_0422",
+ "best_val_mae_m": 0.34970309653880977,
+ "epochs_trained": 40,
+ "args": {
+  "model": "vit",
+  "mode": "fb",
+  "lr": 0.001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 48,
+  "seed": 0,
+  "max_depth": 10.0,
+  "in_ch": 4,
+  "params_M": 89.881,
+  "trainable_M": 89.881
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "run": "rn_r8_fin",
+ "dataset": "replica",
+ "DATA_MODULE": "data_0422",
+ "best_val_mae_m": 0.427323654334135,
+ "epochs_trained": 40,
+ "args": {
+  "model": "resnet",
+  "mode": "r8",
+  "lr": 0.001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 48,
+  "seed": 1,
+  "max_depth": 10.0,
+  "in_ch": 8,
+  "params_M": 30.031,
+  "trainable_M": 30.031
+ }
+}

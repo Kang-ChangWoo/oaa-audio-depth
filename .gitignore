@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pth
+*.pt
+# training / evaluation outputs (checkpoints, renders, logs) -- kept locally, not versioned
+out/
+comparison/*/
+comparison_mp3d/*/
+!comparison/README.md
+cache_cide/
+supple/
+*.bak
+*.bak2
+*.log
+*.tex
+env.local.sh
+comparison/oaa_r8_novdrop

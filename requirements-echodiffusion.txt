@@ -1,0 +1,18 @@
+# Isolated environment for the EchoDiffusion baseline ONLY (model/echodiffusion.py, train_echodiffusion.py,
+# eval_echodiffusion.py, build_cide_cache.py, *_eco.py). The vendored Stable-Diffusion/EcoDepth sources in
+# model/echodiffusion_src/ require torch 1.13 + mmcv 1.7.  Tested with Python 3.10, CUDA 11.7.
+torch==1.13.1
+torchvision==0.14.1
+mmcv-full==1.7.1
+pytorch-lightning==1.9.5
+transformers==4.25.1
+diffusers==0.11.1
+kornia==0.6.9
+timm==0.6.13
+omegaconf==2.3.0
+einops==0.6.1
+numpy==1.24.4
+soundfile
+setuptools==69.5.1
+# The CIDE branch loads `facebook/wav2vec2-base-960h` from the HuggingFace hub; set HF_HOME to the
+# download location (model/echodiffusion.py defaults it to a local path -- override via env).
