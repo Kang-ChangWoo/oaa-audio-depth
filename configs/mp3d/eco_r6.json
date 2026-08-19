@@ -1,0 +1,22 @@
+{
+ "run": "eco_r6",
+ "dataset": "mp3d",
+ "DATA_MODULE": "data_mp3d",
+ "best_val_mae_m": 0.9055357549338569,
+ "epochs_trained": 28,
+ "args": {
+  "mode": "r6",
+  "wave_mode": "std",
+  "wave_window": 48000,
+  "lr": 0.0001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 6,
+  "seed": 0,
+  "patience": 12,
+  "port": "faithful",
+  "max_depth": 10.0,
+  "model": "echodiffusion",
+  "amp": "fp32"
+ }
+}

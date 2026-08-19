@@ -1,0 +1,20 @@
+{
+ "run": "es_r2_fin",
+ "dataset": "mp3d",
+ "DATA_MODULE": "data_mp3d",
+ "best_val_mae_m": 1.1338724468458272,
+ "epochs_trained": 40,
+ "args": {
+  "model": "echoscan",
+  "mode": "r2",
+  "lr": 0.001,
+  "warmup_ep": 2.0,
+  "epochs": 40,
+  "batch_size": 64,
+  "seed": 0,
+  "max_depth": 10.0,
+  "in_ch": 2,
+  "params_M": 41.252,
+  "trainable_M": 41.252
+ }
+}

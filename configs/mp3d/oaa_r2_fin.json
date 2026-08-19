@@ -1,0 +1,24 @@
+{
+ "run": "oaa_r2_fin",
+ "dataset": "mp3d",
+ "DATA_MODULE": "data_mp3d",
+ "best_val_mae_m": 1.063963971106689,
+ "epochs_trained": 40,
+ "args": {
+  "nviews": 2,
+  "cond_mode": "adaln",
+  "dim": 256,
+  "full_res": true,
+  "full_res_enc": true,
+  "dec_deep": true,
+  "multi_scale_lift": true,
+  "data_mode": "r2",
+  "accum": 1,
+  "lr": 0.0005,
+  "warmup_ep": 4.0,
+  "epochs": 40,
+  "batch_size": 24,
+  "seed": 0,
+  "max_depth": 10.0
+ }
+}
