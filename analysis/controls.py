@@ -99,7 +99,7 @@ def main():
     for r in a.run_name:
         rd = resolve_run(r, [a.out_dir, "comparison", "comparison/nonselected"])
         ck = torch.load(os.path.join(rd, "best.pth"), map_location="cpu", weights_only=False)
-        model, dmode, nch, kind, poses = build(ck["args"])
+        model, dmode, nch, kind, poses = build(ck["args"], _DM)
         model.load_state_dict(ck["state_dict"]); model.to(device).eval()
         md = ck["args"].get("max_depth", 10.0)
         ld = loader("test", _bs, False, 5, dmode)
