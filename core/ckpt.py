@@ -50,6 +50,13 @@ def build(args, DM):
     # NOTE: checkpoints without `rounds_wired` were trained before rounds/lift reached the model; they are
     # rounds=2 / 16x32 regardless of the stored args (load_state_dict(strict) guards the mismatch).
     wired = args.get("rounds_wired", False)
+    if args.get("audio_backbone") and args["audio_backbone"] != "cnn":     # 0820 AFM-encoder runs
+        from model.audio_backbones_0820 import build_afm_model
+        m = build_afm_model(args, pretrained=False)        # weights come from the checkpoint state_dict
+        poses = poses_for(dmode)
+        if args.get("yaw_flip") and poses:
+            poses = [(-y, e) for (y, e) in poses]
+        return m, dmode, nv, "spec", poses
     m = OAAv2Depth(C=args.get("dim", 256), nviews=nv, dec_deep=args.get("dec_deep", True),
                    stem_stride1=args.get("stem_stride1", False) or False, max_depth=args.get("max_depth", 10.0),
                    rounds=args.get("rounds", 2) if wired else 2,
