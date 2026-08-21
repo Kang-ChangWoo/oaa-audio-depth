@@ -159,10 +159,16 @@ class AFMBackbone(nn.Module):
     forward(x: [B*, 1, 256, 512] magnitude spec) -> [B*, lh*lw, out_dim] patch tokens (no CLS/no pooling)."""
     DIM, DEPTH = 768, 12
 
-    def __init__(self, name, out_dim=256, lh=LH, lw=LW, pretrained=True, verbose=True, stem="linear"):
+    def __init__(self, name, out_dim=256, lh=LH, lw=LW, pretrained=True, verbose=True, stem="linear",
+                 input_norm="std"):
         super().__init__()
         assert name in _SPECS, f"unknown audio backbone {name} (choose from {list(_SPECS)})"
         assert stem in ("linear", "conv"), f"bad afm stem {stem}"
+        # AFM input statistics: "std" = log1p + per-sample standardize (default);
+        # "db" = 20*log10 (AudioSet log-mel-like) + per-sample standardize;
+        # "db_minmax" = dB + per-sample min-max to [0,1] (BAT's native per_sample_minmax_after_db).
+        assert input_norm in ("std", "db", "db_minmax"), f"bad afm input norm {input_norm}"
+        self.input_norm = input_norm
         s = _SPECS[name]
         self.name, self.lh, self.lw, self.stem_kind = name, lh, lw, stem
         self.cls_gets_pos = s["cls_gets_pos"]
@@ -250,11 +256,19 @@ class AFMBackbone(nn.Module):
 
     # ---- forward -------------------------------------------------------------
     def forward(self, x):
-        # AFM input normalization (fine CNN path keeps the raw magnitude): log1p + per-sample standardize
-        x = torch.log1p(x)
-        mu = x.mean(dim=(1, 2, 3), keepdim=True)
-        sd = x.std(dim=(1, 2, 3), keepdim=True).clamp(min=1e-4)            # zeroed (vdrop) inputs stay finite
-        x = (x - mu) / sd
+        # AFM input normalization (the fine CNN path keeps the raw magnitude)
+        if self.input_norm == "std":
+            x = torch.log1p(x)
+        else:                                                              # dB scale, like AudioSet log-mels
+            x = 20.0 * torch.log10(x.clamp(min=1e-5))
+        if self.input_norm == "db_minmax":                                 # BAT: per-sample minmax after dB
+            lo = x.amin(dim=(1, 2, 3), keepdim=True)
+            hi = x.amax(dim=(1, 2, 3), keepdim=True)
+            x = (x - lo) / (hi - lo).clamp(min=1e-4)
+        else:
+            mu = x.mean(dim=(1, 2, 3), keepdim=True)
+            sd = x.std(dim=(1, 2, 3), keepdim=True).clamp(min=1e-4)        # zeroed (vdrop) inputs stay finite
+            x = (x - mu) / sd
         t = self.patch(x).flatten(2).transpose(1, 2)                       # (B*, lh*lw, 768) freq-major
         t = t + self.pos_embed
         cls = self.cls_token + self.cls_pos_buf
@@ -284,7 +298,8 @@ class AFMViewEncoder(nn.Module):
     """Drop-in replacement for model.oaa.ViewEncoder: AFM coarse tokens + the ORIGINAL lightweight
     CNN fine path (ViewEncoder truncated at its (2lh, 2lw) fine tap, weights fresh, base LR)."""
     def __init__(self, name, C=256, ngf=64, in_ch=1, norm="group", lh=LH, lw=LW,
-                 enc_res=(256, 512), stem_stride1=False, pretrained=True, afm_stem="linear"):
+                 enc_res=(256, 512), stem_stride1=False, pretrained=True, afm_stem="linear",
+                 afm_input_norm="std"):
         super().__init__()
         assert in_ch == 1, "AFM encoder supports 1 channel per observation"
         fe = ViewEncoder(C, ngf, in_ch, norm, lh, lw, enc_res, stem_stride1)
@@ -292,7 +307,8 @@ class AFMViewEncoder(nn.Module):
         fe.net = fe.net[: 2 * (stages - 1)]                               # keep up to the (2lh,2lw) fine tap
         self.fine_enc = fe
         self.fine_ch = fe.fine_ch
-        self.afm = AFMBackbone(name, out_dim=C, lh=lh, lw=lw, pretrained=pretrained, stem=afm_stem)
+        self.afm = AFMBackbone(name, out_dim=C, lh=lh, lw=lw, pretrained=pretrained, stem=afm_stem,
+                               input_norm=afm_input_norm)
         self.C, self.lh, self.lw = C, lh, lw
         self.enc_res, self.stem_stride1 = enc_res, stem_stride1
 
@@ -312,13 +328,13 @@ class AFMViewEncoder(nn.Module):
 class OAAv2DepthAFM(OAAv2Depth):
     """OAAv2Depth with the coarse per-observation encoder swapped for a pretrained AFM.
     Everything downstream of the encoder is inherited unchanged."""
-    def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", **kw):
+    def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", afm_input_norm="std", **kw):
         super().__init__(**kw)
         assert audio_backbone in _SPECS, f"bad audio_backbone {audio_backbone}"
         self.audio_backbone = audio_backbone
         self.enc = AFMViewEncoder(audio_backbone, C=self.C, in_ch=self.in_ch, lh=self.lh, lw=self.lw,
                                   enc_res=self.enc_res, stem_stride1=kw.get("stem_stride1", False),
-                                  pretrained=afm_pretrained, afm_stem=afm_stem)
+                                  pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm)
         # fine_in built by super() from the full ViewEncoder's fine_ch; the truncated fine path keeps
         # the same channel count by construction — assert instead of trusting it silently.
         assert self.fine_in.in_features == self.enc.fine_ch, \
@@ -334,6 +350,7 @@ def build_afm_model(args_dict, pretrained=True):
     return OAAv2DepthAFM(
         audio_backbone=a["audio_backbone"], afm_pretrained=pretrained,
         afm_stem=a.get("afm_stem", "linear") or "linear",
+        afm_input_norm=a.get("afm_input_norm", "std") or "std",
         C=a.get("dim", 256), nviews=a.get("nviews", 4), rounds=a.get("rounds", 2),
         lh=a.get("lift_h", 16), lw=a.get("lift_w", 32), dec_deep=a.get("dec_deep", True),
         stem_stride1=a.get("stem_stride1", False) or False, max_depth=a.get("max_depth", 10.0),

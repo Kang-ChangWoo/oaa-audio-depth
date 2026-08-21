@@ -19,6 +19,10 @@ JOBS=(
 "0820_sslam_llrd_fb_rep|data_0422|--audio-backbone sslam --afm-llrd 0.75 --warmup-ep 8 --accum 4"
 "0820_m2d20ms_fb_mp3d|data_mp3d|--audio-backbone m2d20ms --accum 1"
 "0820_sslam_llrd_fb_mp3d|data_mp3d|--audio-backbone sslam --afm-llrd 0.75 --warmup-ep 8 --accum 1"
+"0820_bat_dbmm_fb_rep|data_0422|--audio-backbone bat --afm-input-norm db_minmax --accum 4"
+"0820_audiomosaic_db_fb_rep|data_0422|--audio-backbone audiomosaic --afm-input-norm db --accum 4"
+"0820_eat_llrd_fb_mp3d|data_mp3d|--audio-backbone eat --afm-llrd 0.75 --warmup-ep 8 --accum 1"
+"0820_bat_dbmm_fb_mp3d|data_mp3d|--audio-backbone bat --afm-input-norm db_minmax --accum 1"
 )
 i=0
 while [ $i -lt ${#JOBS[@]} ]; do

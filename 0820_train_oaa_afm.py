@@ -48,6 +48,7 @@ def main():
     p.add_argument("--afm-random-init", action="store_true")    # Stage-2 ablation: same arch, no pretrained init
     p.add_argument("--afm-stem", default="linear", choices=["linear", "conv"])  # conv = 4x stride-2 conv patch stem
     p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
+    p.add_argument("--afm-input-norm", default="std", choices=["std", "db", "db_minmax"])  # AFM input statistics
     p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
     p.add_argument("--dim", type=int, default=256)
     p.add_argument("--rounds", type=int, default=2)
