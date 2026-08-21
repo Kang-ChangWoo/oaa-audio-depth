@@ -46,6 +46,8 @@ def main():
     p.add_argument("--audio-backbone", required=True, choices=list(BACKBONES))
     p.add_argument("--afm-lr-ratio", type=float, default=0.1)   # pretrained-AFM LR = ratio * lr
     p.add_argument("--afm-random-init", action="store_true")    # Stage-2 ablation: same arch, no pretrained init
+    p.add_argument("--afm-stem", default="linear", choices=["linear", "conv"])  # conv = 4x stride-2 conv patch stem
+    p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
     p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
     p.add_argument("--dim", type=int, default=256)
     p.add_argument("--rounds", type=int, default=2)
@@ -92,8 +94,8 @@ def main():
         model = build_afm_model(vars(a), pretrained=not a.afm_random_init).to(device)
         a.afm_checkpoint = model.enc.afm.checkpoint_id
         assert a.afm_random_init or model.enc.afm.pretrained_loaded, "pretrained AFM weights not loaded"
-        groups = make_param_groups(model, a.lr, a.afm_lr_ratio, a.wd)
-        n_pre = sum(p.numel() for p in groups[0]["params"])
+        groups = make_param_groups(model, a.lr, a.afm_lr_ratio, a.wd, llrd=a.afm_llrd)
+        n_pre = sum(p.numel() for g in groups[1:] for p in g["params"]) if a.afm_llrd else sum(p.numel() for p in groups[0]["params"])
         print(f"[cfg] Audio backbone: {a.audio_backbone} | ckpt: {a.afm_checkpoint} | "
               f"pretrained loaded: {'NO (random init ablation)' if a.afm_random_init else 'YES'} | "
               f"AFM dim 768 -> OAA dim {a.dim} | target grid {a.lift_h}x{a.lift_w} | "
