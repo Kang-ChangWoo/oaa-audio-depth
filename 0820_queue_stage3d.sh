@@ -5,7 +5,8 @@ export AFM_WEIGHTS=/root/local1/changwoo/_afm_weights HF_HOME=/root/local1/chang
 export REPLICA_ROOT=/root/local2/replica_0422_lite MP3D_ROOT=/root/local1/changwoo/matterport3d_0303renew R0422_SPLIT=off3
 mkdir -p comparison_0820/logs
 LL="--audio-backbone eat --afm-llrd 0.75 --warmup-ep 8"
-SEEDS="${SEEDS:-0}"   # multi-seed: SEEDS="0 1 2" bash 0820_queue_stage3d.sh  (seed 0 keeps the base run name)
+SEEDS="${SEEDS:-0}"
+GPUS="${GPUS:-2 3 4 5 6 7}"   # e.g. GPUS="0 1 2 3 4 5 6 7"   # multi-seed: SEEDS="0 1 2" bash 0820_queue_stage3d.sh  (seed 0 keeps the base run name)
 JOBS=(
 "0820_eatllrd_r8novd_rep|data_0422|$LL --nviews 8 --data-mode r8 --epochs 40 --batch-size 3 --accum 11"
 "0820_eatllrd_r8novd_mp3d|data_mp3d|$LL --nviews 8 --data-mode r8 --epochs 30 --batch-size 4 --accum 1 --stem-stride1"
@@ -20,7 +21,7 @@ for s in $SEEDS; do
 done
 i=0
 while [ $i -lt ${#SJOBS[@]} ]; do
-  for g in 2 3 4 5 6 7; do
+  for g in $GPUS; do
     [ $i -ge ${#SJOBS[@]} ] && break
     mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i $g)
     if [ "$mem" -lt 2000 ]; then
