@@ -65,3 +65,30 @@ Replica (1200): CNN 0.260/0.514/0.140/0.826
 
 Commands: see `0820_queue_screen.sh`, `0820_queue_stage2.sh`; per-run args in each
 `comparison_0820/<run>/train_done.json`.
+
+## Stage 3 — eat_llrd multi-seed + channel scaling (2026-08-24 ~ 08-26, runs `0820_queue_stage3.sh` / `_stage3b.sh`)
+
+All rows `eat + LLRD 0.75 + warmup 8`, seed 0 unless noted. Test MAE (m); CNN = paper finals.
+
+**MP3D fb multi-seed — the win replicates (3/3 seeds):**
+s0 0.7728 / s1 0.7740 / s2 0.7684 -> mean **0.7717 ± 0.0024** vs CNN 0.785 (−1.7%); every seed < CNN.
+Variant `--epochs 30` (faster cosine) 0.7689 — slightly better than 40ep s0, verdict VALID as an
+equal-cost alternative; m2d_llrd 0.8160 and m2d20ms_llrd 0.8082 — both REJECTED (LLRD does not
+rescue the m2d family; the backbone matters, not just the recipe).
+
+**Channel scaling (test MAE, AFM vs CNN):**
+
+| obs | Replica AFM | Replica CNN | MP3D AFM | MP3D CNN |
+|---|---|---|---|---|
+| r2 (2ch) | **0.2762** | 0.2894 | **0.9018** | 0.9084 |
+| fb (4ch) | 0.2609 | 0.2596 | **0.7717±0.0024** | 0.785 |
+| r6 (6ch) | 0.2427 | 0.2384 | (running) | 0.7502 |
+| r8 (8ch) | 0.2371 (RMSE 0.4712<0.4810) | 0.2368 | (running) | 0.7467 |
+
+Note val->test rank flips are common (fb Rep val 0.3085 -> test 0.2609 ≈ CNN; r8 Rep val 0.2752
+vs CNN 0.266 -> test tie; r2 MP3D val 1.048 vs 0.908 -> test WIN): compare on test, not val.
+
+**Interpretation update:** the AFM advantage is largest where observations are scarcest (r2: wins
+on BOTH datasets, −4.6% / −0.7%) and on the harder/noisier dataset at any channel count (MP3D fb
+−1.7% across 3 seeds). With rich observations on clean Replica the CNN's near-field precision
+keeps it level or slightly ahead (r6/r8 ties). AudioSet features buy robustness, not precision.
