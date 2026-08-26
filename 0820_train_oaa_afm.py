@@ -49,6 +49,7 @@ def main():
     p.add_argument("--afm-stem", default="linear", choices=["linear", "conv"])  # conv = 4x stride-2 conv patch stem
     p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
     p.add_argument("--afm-input-norm", default="std", choices=["std", "db", "db_minmax"])  # AFM input statistics
+    p.add_argument("--loss-absrel", type=float, default=0.0)    # + lambda * masked AbsRel (near-field upweighting; 0 = paper L1)
     p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
     p.add_argument("--dim", type=int, default=256)
     p.add_argument("--rounds", type=int, default=2)
@@ -150,6 +151,8 @@ def main():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 D = model(spec_in, view_poses=vp)
             loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
+            if a.loss_absrel > 0:
+                loss = loss + a.loss_absrel * (((D.float() - gt).abs() / gt.clamp(min=0.03)) * mask).sum() / mask.sum().clamp(min=1e-6)
             (loss / accum).backward()
             run += float(loss.detach()); nb += 1
             if (i + 1) % accum == 0 or (i + 1) == nbatch:
