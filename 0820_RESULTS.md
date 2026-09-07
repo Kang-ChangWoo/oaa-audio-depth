@@ -278,3 +278,32 @@ Replica fb; scripts: 0820_reverb_ablation.py {v1|sweep|notch|renorm|seeds|shuffl
    recipe variant + oaa_fb_vw same-arch retrain — does the earlyzero/latecut8 pattern reproduce,
    ruling out single-seed artefacts); shuffle-tail (permute 0.2 m blocks after 6 m, energy
    preserved, structure destroyed — if sslam drops like latecut6m it reads STRUCTURE, not energy).
+
+## Mechanism campaign, round 3: notch matrix, seed replication, shuffle-tail — final story
+
+**Notch damage matrix** (zero one 2 m depth-slot; dMAE per band): CNN is slot-local (diagonal):
+its far band loses +0.123 when the far slot is cut, mid mostly from its own slot. sslam is
+cross-slot: mid loses ~2x the CNN amount when 6-8 m or 8-10 m slots are cut (mid primaries
+untouched), and — the standout cell — sslam's far band loses only +0.019 when its OWN primary
+slot (8-10 m) is removed (CNN +0.123, eat +0.111): sslam reconstructs far depth largely without
+far primaries.
+
+**Seed replication** (independent trainings: oaa_fb_vw retrain, sslam s1 true seed, sslam_llrd):
+every direction reproduces — earlyzero collapse CNN 1.55x sslam (orig 2.4x); latecut8 tail
+dependence AFM 4-7x CNN. Magnitudes fluctuate with seed (sslam mid d at latecut8: 0.195 -> 0.040):
+qualitative claims are seed-robust, single-seed magnitudes should not be quoted as precise.
+
+**Shuffle-tail** (permute 0.2 m blocks after 6 m; energy preserved, temporal arrangement destroyed):
+harmless to every model (dMAE +0.003..+0.008 vs latecut6m +0.09..+0.15). Combined with the notch
+matrix (damage ~ proportional to removed energy, similar for 6-8 vs 8-10 slots), this REFINES the
+mechanism: what the models — sslam best of all — read from the tail is its *aggregate reverberant
+energy/spectral statistics* (decay/DRR-like cues), not a precisely-timed arrangement of individual
+multi-bounce arrivals.
+
+**Final mechanism statement.** The task CNN binds depth to local onset features (first-arrival
+timing + absolute-amplitude reference): single-witness readout, cliff collapse when the onset is
+perturbed, slot-diagonal damage. SSLAM carries a distributed readout: graceful degradation under
+any component deletion, cross-slot integration (far reconstructed without far primaries), and a
+better extraction of aggregate tail statistics — consistent with mixture-SSL pretraining teaching
+robust spectral statistics under superposition. Four independent manipulations (earlyzero+renorm,
+latecut sweep, notch matrix, shuffle-tail) and a seed replication all point the same way.
