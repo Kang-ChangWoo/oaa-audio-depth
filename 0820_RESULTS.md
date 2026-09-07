@@ -236,8 +236,13 @@ largest dmid of the three models; (3) the naive total-dMAE prediction (dSSLAM >>
 is refuted in an informative way: sslam degrades LEAST under every deletion (far d +0.556 vs CNN
 +0.782 even under latecut) — its representation is *distributed*, reconstructing from whatever
 component survives, while the CNN is the most fragile under any distribution shift (even its near
-band doubles sslam's dnear under latecut). Mechanism sentence: mixture-SSL transfers to
-echo-geometry because it encodes depth in distributed reverberant structure; the task CNN relies on
-local arrival-time cues. This also explains the pretraining-objective far>6 ranking (mixture <
+band doubles sslam's dnear under latecut). TERMINOLOGY CORRECTION (important): the input window is already truncated at 2799 samples =
+10 m round-trip (58 ms), so NO model ever sees RT60-style late diffuse reverberation. What latecut
+removes is the *trailing portion of the truncated echo train*: far-surface primaries + low-order
+multi-bounce components with total path 12-20 m (which do land inside the window). Mechanism
+sentence, corrected: mixture-SSL transfers to echo-geometry because it encodes depth in the
+*distributed multi-path structure within the 58 ms echo train* (overlapping discrete arrivals —
+exactly what mixture pretraining teaches it to disentangle), not in diffuse reverb statistics;
+the task CNN binds depth to local early arrival-time cues. This also explains the pretraining-objective far>6 ranking (mixture <
 masked < contrastive < gated): objectives differ in how much of that distributed structure they
 preserve.
