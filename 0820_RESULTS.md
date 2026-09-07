@@ -132,3 +132,38 @@ Replica r8+vdrop) are training (stage 3k).** MP3D per-channel CNN territory has 
 Fine-tuning-policy spectrum (MP3D fb): careless uniform ft 0.853 < frozen-hybrid (eco) 0.793 <
 scratch CNN 0.785 < LLRD ft 0.773 — LLRD is the layer-wise interpolation between eco's freezing
 and naive fine-tuning, and the only "free lunch" of the campaign.
+
+## Backbone provenance & the pretraining-objective ranking
+
+| backbone | paper | objective | checkpoint |
+|---|---|---|---|
+| EAT | "EAT: Self-Supervised Pre-Training with Efficient Audio Transformer", W. Chen et al., IJCAI 2024 | masked prediction of teacher features (utterance+frame) | worstchan/EAT-base_epoch30_pretrain |
+| SSLAM | "SSLAM: Enhancing Self-Supervised Models with Audio Mixtures for Polyphonic Soundscapes", T. Alex et al., ICLR 2025 | EAT framework + audio-mixture SSL (source-preserving) | ta012/SSLAM_pretrain |
+| AudioMosaic | "AudioMosaic: Contrastive Masked Audio Representation Learning", H. Huang et al., ICML 2026 (arXiv:2605.14231) | NT-Xent contrastive over structured TF-masked views | hanxunh/AudioMosaic-vit-b16-pretrained |
+| BAT | "BAT: Better Audio Transformer Guided by Convex Gated Probing", H. Ghaffari, L. Rauch et al. (arXiv:2602.16305) | gated probing (convex gates suppress non-discriminative regions) | lrauch/BAT-vit-b16-pretrainedAS2M |
+| M2D / M2D-CLAP | "Masked Modeling Duo", D. Niizumi et al., ICASSP 2023 / TASLP; M2D-CLAP (Interspeech 2024, 2025 ckpt) | masked prediction duo (+CLAP semantic alignment) | nttcslab m2d_clap_vit_base-*-2025 |
+
+All ViT-B/16 on AudioSet-2M -> backbone differences isolate the OBJECTIVE. Replica fb far>6 band
+ranks exactly by objective type: mixture-SSL 1.446 (sslam) < masked-pred 1.546 (eat) < CLAP-masked
+1.651 (m2d) < contrastive 1.653 (audiomosaic) < gated 1.875 (bat). near<3 is a 0.003-wide tie
+(0.1422-0.1470): every AFM inherits the same patch-timing floor; objectives differ ONLY in how
+much reverb structure they preserve.
+
+**Why AudioMosaic / BAT never gained:** their failures are entirely mid/far (reverb), not near.
+- AudioMosaic's contrastive NT-Xent *maximises invariance* across masked views — reverb tails are
+  exactly the kind of view-dependent detail the objective trains away (mid 0.833 vs sslam 0.715).
+- BAT's convex gates learn to *suppress non-discriminative (diffuse) regions* to sharpen probing —
+  diffuse late reverb IS our depth signal, so the gates delete it (far 1.875, worst of all five).
+  Notably BAT was the best plain-recipe val on MP3D (0.9240): suppression acts as denoising on
+  noisy data, but the ceiling is low for the same reason.
+- Objective ranking for echo-depth: source-preserving (mixture) > reconstruction (masked) >
+  semantic alignment (CLAP) > invariance (contrastive) > suppression (gated).
+
+**Future directions (not yet run):**
+1. *Spatial-mixture DAPT*: continue SSLAM pretraining on multi-channel RIR-convolved AudioSet —
+   mixtures whose components differ by direction/delay, teaching exactly the cue this task needs.
+2. *Phase/ITD input*: the loader is magnitude-only; sub-frame timing lives in phase. A phase or
+   GCC-PHAT channel could lift the shared near-field floor all ViTs sit on.
+3. *Band-expert routing*: CNN(near) + sslam(mid/far) + eco(far prior) behind a range-gated head —
+   the 3-model metric table shows they are complementary by construction.
+4. *sslam multi-seed everywhere + r8-vd cell* (3k, in flight) to finish the symmetric-win claim.
