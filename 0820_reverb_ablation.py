@@ -35,20 +35,58 @@ def _masked(wav2):
         w = w.clone(); w[:, int(ABL["m"] * SPM):] = 0
     elif ABL["mode"] == "earlyzero":
         w = w.clone(); w[:, :int(ABL["m"] * SPM)] = 0
+    elif ABL["mode"] == "notch":
+        w = w.clone(); w[:, int(ABL["m"] * SPM):int(ABL["m2"] * SPM)] = 0
+    elif ABL["mode"] == "shuffle":
+        i0 = int(ABL["m"] * SPM); blk = 56                 # 0.2 m blocks
+        w = w.clone(); seg = w[:, i0:]
+        n = seg.shape[1] // blk
+        g = torch.Generator().manual_seed(0)
+        perm = torch.randperm(n, generator=g)
+        w[:, i0:i0 + n * blk] = seg[:, :n * blk].reshape(w.shape[0], n, blk)[:, perm].reshape(w.shape[0], -1)
+    elif ABL["mode"] == "earlyzero_renorm":
+        s0 = w.std()
+        w = w.clone(); w[:, :int(ABL["m"] * SPM)] = 0
+        w = w * (s0 / w.std().clamp(min=1e-8))            # restore overall energy statistics
     return _orig(w)
 
 D._stft_mag = _masked
 
 MODELS = {"cnn": "oaa_fb_fin", "eat_llrd": "0820_eatllrd_fb_rep", "sslam": "0820_sslam_fb_rep"}
-CONDS = [("clean", 0.0), ("latecut", 6.0), ("latecut", 4.0), ("earlyzero", 1.0)]
+import sys
+SET = sys.argv[1] if len(sys.argv) > 1 else "v1"
+if SET == "v1":
+    CONDS = [("clean", 0.0), ("latecut", 6.0), ("latecut", 4.0), ("earlyzero", 1.0)]
+    OUT = "comparison_0820/reverb_ablation.json"
+elif SET == "sweep":
+    CONDS = [("clean", 0.0)] + [("latecut", m) for m in (3.0, 5.0, 7.0, 8.0, 9.0)]
+    OUT = "comparison_0820/reverb_ablation_sweep.json"
+elif SET == "renorm":
+    CONDS = [("clean", 0.0), ("earlyzero", 1.0), ("earlyzero_renorm", 1.0)]
+    OUT = "comparison_0820/reverb_ablation_renorm.json"
+elif SET == "shuffle":
+    CONDS = [("clean", 0.0), ("shuffle", 6.0), ("latecut", 6.0)]
+    OUT = "comparison_0820/reverb_ablation_shuffle.json"
+elif SET == "seeds":
+    MODELS = {"cnn_vw": "oaa_fb_vw", "sslam_s1": "0820_sslam_s1_fb_rep", "sslam_llrd": "0820_sslam_llrd_fb_rep"}
+    CONDS = [("clean", 0.0), ("earlyzero", 1.0), ("latecut", 8.0)]
+    OUT = "comparison_0820/reverb_ablation_seeds.json"
+elif SET == "notch":
+    CONDS = [("clean", 0.0), ("notch", (2.0, 4.0)), ("notch", (4.0, 6.0)),
+             ("notch", (6.0, 8.0)), ("notch", (8.0, 10.0))]
+    OUT = "comparison_0820/reverb_ablation_notch.json"
 
 def main():
     DM = get_data_module()
     dev = torch.device("cuda")
     out = {}
     for mode, m in CONDS:
-        ABL["mode"], ABL["m"] = mode, m
-        cname = mode if mode == "clean" else f"{mode}{m:g}m"
+        if mode == "notch":
+            ABL["mode"], ABL["m"], ABL["m2"] = mode, m[0], m[1]
+            cname = f"notch{m[0]:g}-{m[1]:g}m"
+        else:
+            ABL["mode"], ABL["m"] = mode, m
+            cname = mode if mode == "clean" else f"{mode}{m:g}m"
         out[cname] = {}
         for tag, run in MODELS.items():
             rd = resolve_run(run, ["comparison", "comparison_0820"])
@@ -56,7 +94,7 @@ def main():
             out[cname][tag] = {k: round(float(v), 4) for k, v in r.items()}
             print(f"[{cname:12}] {tag:9} MAE={r['MAE']:.4f} near={r['near<3']:.4f} "
                   f"mid={r['mid3-6']:.4f} far={r['far>6']:.4f}", flush=True)
-    json.dump(out, open("comparison_0820/reverb_ablation.json", "w"), indent=2)
+    json.dump(out, open(OUT, "w"), indent=2)
     print("\n== deltas vs clean (MAE / near / mid / far) ==")
     for cname in out:
         if cname == "clean": continue
@@ -64,7 +102,7 @@ def main():
             c, a = out["clean"][tag], out[cname][tag]
             print(f"{cname:12} {tag:9} d=" + " / ".join(
                 f"{a[k]-c[k]:+.4f}" for k in ("MAE", "near<3", "mid3-6", "far>6")))
-    print("[saved] comparison_0820/reverb_ablation.json", flush=True)
+    print(f"[saved] {OUT}", flush=True)
 
 if __name__ == "__main__":
     main()

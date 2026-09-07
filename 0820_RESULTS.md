@@ -246,3 +246,35 @@ exactly what mixture pretraining teaches it to disentangle), not in diffuse reve
 the task CNN binds depth to local early arrival-time cues. This also explains the pretraining-objective far>6 ranking (mixture <
 masked < contrastive < gated): objectives differ in how much of that distributed structure they
 preserve.
+
+## Mechanism campaign, round 2 (2026-09-07): controls and refinements
+
+Discussion-driven corrections and the experiments they spawned (all test-time, frozen models,
+Replica fb; scripts: 0820_reverb_ablation.py {v1|sweep|notch|renorm|seeds|shuffle}):
+
+1. **What "direct sound" is here.** The rig self-emits; waveforms are rendered IRs. The direct
+   spike sits at a FIXED 49 samples (1.02 ms — emitter-to-ear rig geometry) in every scene,
+   ~1.5 ms wide, 44-72% of window energy. It carries zero scene information; first reflections
+   (scene-dependent, >=280 smp for >=1 m surfaces) do not overlap it. STFT smearing feathers any
+   time cut by ~±0.7 m equivalent (symmetric across models).
+2. **"Big-signal / normalisation" hypothesis — REFUTED by the renorm control.** Zeroing the onset
+   and then restoring waveform energy made every model WORSE (cnn dMAE +0.706->+0.810,
+   eat +0.459->+0.535, sslam +0.293->+0.324). The AFMs self-normalise per sample anyway (log1p+std),
+   so the statistics shock was never the driver; boosting surviving echoes distorts the
+   amplitude-distance cue instead. The earlyzero damage is therefore genuine loss of onset-region
+   features — and the CNN (which has NO input normalisation) losing most confirms its readout is
+   onset-bound (arrival-time + absolute-amplitude reference).
+3. **Latecut sweep (3/5/7/8/9 m): the advantage is DISTRIBUTED, and it grows with distance.**
+   Clean sslam-vs-CNN edge by band: near +0.007 (CNN), mid -0.043, far -0.074 — the AFM edge is
+   proportional to distance (weaker/ambiguous primaries -> multi-bounce corroboration matters more).
+   Cutting only the final 8-10 m segment already flips the mid edge (-0.043 -> +0.056), and each
+   earlier cut deepens it smoothly (7 m +0.079, 5 m +0.168, 3 m +0.212): no cliff at any single
+   slot -> the edge is integrated thinly across the whole tail. One-witness (CNN onset, cliff
+   collapse under earlyzero) vs many-small-clues (sslam tail, graceful degradation) is exactly the
+   distributed-representation signature. Caveat: absolute dMAE inflates with OOD-ness as the cut
+   moves earlier; read the sslam-CNN differential, not absolute values.
+4. **In flight**: notch matrix (zero one 2 m slot at a time -> which DEPTH bands break: CNN should
+   be diagonal / slot-local, sslam off-diagonal); seed replication (sslam s1 true seed + llrd
+   recipe variant + oaa_fb_vw same-arch retrain — does the earlyzero/latecut8 pattern reproduce,
+   ruling out single-seed artefacts); shuffle-tail (permute 0.2 m blocks after 6 m, energy
+   preserved, structure destroyed — if sslam drops like latecut6m it reads STRUCTURE, not energy).
