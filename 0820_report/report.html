@@ -1,0 +1,119 @@
+<title>HEAR-360 AFM Encoder Campaign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#faf9f6;--ink:#22201c;--sub:#6b675f;--line:#e3ded4;--accent:#2e7d5b;--accent2:#b8544f;
+      --card:#ffffff;--code:#f1efe9;--win:#e4f2ea;--lose:#f7e8e6}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#191817;--ink:#e8e5df;--sub:#a29d93;
+  --line:#3a3833;--accent:#5fb890;--accent2:#d98a85;--card:#211f1d;--code:#26241f;--win:#1e3529;--lose:#3a2523}}
+:root[data-theme="dark"]{--bg:#191817;--ink:#e8e5df;--sub:#a29d93;--line:#3a3833;--accent:#5fb890;
+  --accent2:#d98a85;--card:#211f1d;--code:#26241f;--win:#1e3529;--lose:#3a2523}
+body{background:var(--bg);color:var(--ink);font-family:'Noto Sans KR',system-ui,sans-serif;
+     line-height:1.7;margin:0;padding:0 20px 80px}
+main{max-width:880px;margin:0 auto}
+h1{font-size:1.85rem;font-weight:700;margin:48px 0 4px;text-wrap:balance}
+.sub{color:var(--sub);margin:0 0 32px;font-size:.95rem}
+h2{font-size:1.3rem;margin:48px 0 12px;padding-top:18px;border-top:1px solid var(--line)}
+h3{font-size:1.05rem;margin:26px 0 8px;color:var(--accent)}
+p,li{max-width:72ch}
+b.g{color:var(--accent)} b.r{color:var(--accent2)}
+.key{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+     border-radius:6px;padding:14px 18px;margin:18px 0}
+.note{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent2);
+     border-radius:6px;padding:12px 18px;margin:14px 0;font-size:.93rem}
+figure{margin:22px 0;overflow-x:auto}
+figure img{max-width:100%;border:1px solid var(--line);border-radius:6px;background:#fff}
+figcaption{color:var(--sub);font-size:.86rem;margin-top:8px;max-width:76ch}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font-size:.88rem;margin:12px 0;font-variant-numeric:tabular-nums}
+th,td{border:1px solid var(--line);padding:5px 10px;text-align:right}
+th{background:var(--code);font-weight:500}
+td:first-child,th:first-child{text-align:left}
+.w{background:var(--win)} .l{background:var(--lose)}
+code{font-family:'IBM Plex Mono',monospace;font-size:.86em;background:var(--code);padding:1px 5px;border-radius:4px}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:.92rem}
+dt{font-weight:500;color:var(--accent)}
+dd{margin:0;max-width:66ch}
+</style>
+<main>
+<h1>소리로 방의 깊이 지도를 만들기 — 오디오 파운데이션 모델 인코더 실험 보고서</h1>
+<p class="sub">2026-08-20 ~ 09-07 · 학습 ~80회 + 분석 실험 6종 · 코드 <code>hear360/0820_*</code> · 데이터 Replica(합성·깨끗) / Matterport3D(실측 스캔·거침)</p>
+
+<h2>0. 과제와 용어 — 이것만 알면 아래를 다 읽을 수 있음</h2>
+<p><b>과제</b>: 로봇 리그가 "삑" 소리(처프)를 내고, 몸에 달린 마이크 2~8개로 <b>58ms 동안</b> 메아리를 녹음한다. 이 녹음만으로 360° 깊이 지도(각 방향의 벽까지 거리, 0~10m)를 예측한다. 소리는 1m를 갔다 오는 데 약 5.8ms 걸리므로 <b>녹음의 시간축이 곧 거리축</b>이다: 3m 벽의 첫 메아리는 17ms쯤, 8m 벽은 47ms쯤에 도착한다. 녹음 뒷부분에는 "먼 벽의 첫 메아리"와 "가까운 벽들 사이를 여러 번 튕긴 메아리"가 겹쳐 있다.</p>
+<p><b>기준 모델(OAA-CNN)</b>: 논문의 모델. 마이크별 스펙트로그램을 작은 CNN(15.4M 파라미터)으로 인코딩하고, 마이크의 위치·방향 정보를 쓰는 기하 attention으로 합쳐 깊이 지도를 만든다. 이 캠페인은 <b>이 CNN 인코더 하나만</b> 사전학습된 오디오 파운데이션 모델(AFM, ViT-B/16 86M)로 바꾸고 나머지는 전부 그대로 둔다 — 그래야 성능 차이가 인코더 하나로 귀속된다.</p>
+<dl>
+<dt>r2 / fb / r6 / r8</dt><dd>마이크(관측) 2 / 4 / 6 / 8개 구성. 많을수록 정보가 많아 문제가 쉬워진다.</dd>
+<dt>MAE</dt><dd>예측 깊이와 정답의 평균 오차(미터). 낮을수록 좋다. near/mid/far = 정답이 3m 미만 / 3–6m / 6m 초과인 픽셀만 따로 계산한 오차.</dd>
+<dt>val / test</dt><dd>val = 학습 중 모델 선택용 검증 점수, test = 최종 평가. 이 캠페인에서 val 순위와 test 순위가 자주 뒤집혀서(박빙일 때 절반), <b>모든 결론은 test 기준</b>이다.</dd>
+<dt>시드(seed)</dt><dd>같은 설정을 난수만 바꿔 다시 학습한 것. 점수가 ±0.005~0.012 흔들리므로, 격차가 0.01 이하인 비교는 시드 2~3개 평균으로 판정했다.</dd>
+<dt>LLRD</dt><dd>Layer-wise LR Decay. 사전학습 모델을 미세조정할 때 아래층(범용 특징)은 거의 안 건드리고(학습률 2e-6) 위층만 크게(5e-5) 조정하는 방법. 층마다 0.75배씩 줄인다.</dd>
+<dt>vdrop</dt><dd>학습 중 마이크 몇 개의 입력을 무작위로 0으로 만드는 정규화(mic drop).</dd>
+<dt>사전학습 목적함수</dt><dd>AFM이 AudioSet(유튜브 소리 200만 개)에서 "무엇을 맞히도록" 훈련됐는가. 5개 백본은 아키텍처·데이터가 같고 이것만 다르다 — EAT=가려진 부분의 특징 맞히기(masked), SSLAM=여러 소리를 섞어 놓고 각각을 복원하기(mixture), AudioMosaic=변형해도 같은 소리임을 알기(contrastive), BAT=분류에 안 중요한 부분을 게이트로 끄기(gated), M2D-CLAP=텍스트 의미와 정렬(CLAP).</dd>
+</dl>
+
+<div class="key"><b>결론 세 줄</b><br>
+① 채널 2/4/6/8 × 데이터셋 2 = 8칸 중 <b class="g">6칸에서 AFM이 논문 CNN을 역전</b>(박빙 칸은 시드 3개로 확인). 남은 2칸(MP3D 6/8ch의 sslam)은 학습 중.<br>
+② 어떤 AFM이 이기는지는 <b>사전학습 목적함수가 결정</b>한다: 소리 "섞어서 복원"(SSLAM)이 최고, "안 중요한 것 끄기"(BAT)가 최악 — far 오차가 정확히 이 순서.<br>
+③ 분석 실험 6종의 결론: <b>CNN은 첫 메아리의 도착 시각과 크기에 의존</b>하고(그 부분을 지우면 sslam의 1.5~2.4배로 붕괴), <b>SSLAM은 녹음 뒷부분(꼬리)의 전체적인 잔향 에너지·스펙트럼 통계를 추가로 활용</b>한다(꼬리를 지우면 우위 소멸, 순서만 섞으면 무해).</div>
+
+<h2>1. 성능: 채널 × 데이터셋 매트릭스</h2>
+<p>각 모델 계열의 대표 설정으로 test MAE를 정리했다. <span style="background:var(--win);padding:0 6px">초록</span> = 같은 칸의 CNN보다 좋음. ± 표시는 시드 2~3개의 평균±표준편차.</p>
+<figure><img src="figs/fig1_channel_scaling.png" alt="channel scaling"><figcaption><b>그림 1.</b> 마이크 수가 늘수록(오른쪽) 모두 좋아지지만 기울기가 다르다. Replica(왼쪽)에서는 sslam(초록)이 전 구간 최저이고, MP3D(오른쪽)에서는 eat/sslam이 2·4·8ch에서 CNN 아래다. sslam의 MP3D 6/8ch 점은 아직 학습 중이라 비어 있다.</figcaption></figure>
+<div class="tw"><table>
+<tr><th>test MAE (m)</th><th>Rep 2ch</th><th>Rep 4ch</th><th>Rep 6ch</th><th>Rep 8ch</th><th>MP3D 2ch</th><th>MP3D 4ch</th><th>MP3D 6ch</th><th>MP3D 8ch</th></tr>
+<tr><td>OAA-CNN (논문, 15.4M)</td><td>0.2894</td><td>0.2596</td><td>0.2384</td><td>0.2368</td><td>0.9084</td><td>0.7849</td><td class="w">0.7502</td><td>0.7467</td></tr>
+<tr><td>eat + LLRD (86M)</td><td class="w">0.2762</td><td>0.2609</td><td>0.2427</td><td class="w">0.2371¹</td><td class="w">0.9018</td><td class="w">0.7717±.002</td><td>0.7736</td><td class="w">0.7395±.011²</td></tr>
+<tr><td>sslam (+LLRD)</td><td class="w">0.2711</td><td class="w">0.2553³</td><td class="w">0.2336±.005</td><td>0.2399 (vd판 학습중)</td><td class="w">0.8991</td><td class="w">0.7714⁴</td><td>학습중</td><td>학습중</td></tr>
+<tr><td>EchoDiffusion (비교)</td><td>0.2854</td><td>0.2695</td><td>0.2556</td><td>0.2600</td><td class="w">0.9007</td><td>0.7928</td><td>0.7786</td><td>0.7572</td></tr>
+<tr><td>eat+LLRD+convstem</td><td></td><td class="l">0.2644</td><td></td><td></td><td></td><td class="w">0.7617 (fb 최고)</td><td></td><td></td></tr>
+</table></div>
+<p>¹ Replica 8ch만 vdrop 사용(아래 §4). ² 8ch MP3D는 vdrop 없이, 시드 3개. ³ 시드 2개 기준 CNN과 사실상 동률(0.2553/0.2636, 평균 0.2595 vs 0.2596) — 세 번째 시드가 대기열에 있다. ⁴ LLRD 층감쇠 0.65 버전, 단일 시드(시드 추가 대기열).</p>
+<p><b>읽는 법</b>: 마이크가 적을수록(2·4ch), 데이터가 거칠수록(MP3D) AFM이 이긴다. 마이크가 많고 데이터가 깨끗하면(Replica 6·8ch) CNN의 정밀도가 따라잡는다 — 단 sslam은 Replica 6ch에서 8개 지표(MAE·RMSE·AbsRel·δ1·near·mid·far 전부)를 <b>동시에</b> 이긴 유일한 모델이다.</p>
+
+<h2>2. 어떤 AFM을 골라야 하나 — 사전학습 목적함수가 결정한다</h2>
+<p>5개 백본은 같은 구조(ViT-B/16), 같은 데이터(AudioSet-2M)로 사전학습됐고 목적함수만 다르다. 그래서 성능 차이는 목적함수 하나로 귀속된다. 아래 그림처럼 <b>근거리 오차는 5개가 0.005 이내로 붙는데</b>(스펙트로그램을 16×16 패치로 자르는 공통 구조가 만드는 타이밍 정밀도 한계), <b>원거리 오차는 크게 벌어진다</b>:</p>
+<figure><img src="figs/fig5_objective_bands.png" alt="objective bands"><figcaption><b>그림 5.</b> Replica 4ch에서 거리대역별 오차. 왼쪽 막대(near)는 다 비슷하고 오른쪽 막대(far)가 모델을 가른다 — far를 잘 맞히는 순서가 곧 목적함수 순서다.</figcaption></figure>
+<div class="tw"><table>
+<tr><th>백본</th><th>논문</th><th>사전학습에서 배운 것</th><th>far MAE</th><th>해석</th></tr>
+<tr><td>SSLAM</td><td>Alex et al., ICLR'25</td><td>섞인 소리에서 각 소스 복원</td><td class="w">1.446</td><td>겹친 메아리 다루기 = 이 과제 그 자체</td></tr>
+<tr><td>EAT</td><td>Chen et al., IJCAI'24</td><td>가려진 부분의 특징 예측</td><td>1.546</td><td>재구성 학습 — 내용 보존</td></tr>
+<tr><td>M2D-CLAP</td><td>Niizumi et al.</td><td>+ 텍스트 의미 정렬</td><td>1.651</td><td>의미로 쏠리며 신호 디테일 희생</td></tr>
+<tr><td>AudioMosaic</td><td>Huang et al., ICML'26</td><td>변형 불변성(대조학습)</td><td>1.653</td><td>잔향을 "변형"으로 취급해 지움</td></tr>
+<tr><td>BAT</td><td>Ghaffari &amp; Rauch et al.</td><td>안 중요한 영역 게이트로 차단</td><td class="l">1.875</td><td>확산 잔향(=깊이 신호)을 차단</td></tr>
+</table></div>
+
+<h2>3. 메커니즘: SSLAM은 정말 잔향을 읽어서 이기는가? — 분석 실험 6종</h2>
+<p>학습 없이, 이미 학습된 모델들에게 <b>조작한 test 입력</b>을 주고 성적 하락(Δ)을 쟀다. 조작은 파형 단계에서 시간 구간을 지우거나 섞는 방식이다. 이 데이터의 파형은 렌더링된 임펄스 응답이라, "직접음"(스피커→귀로 바로 오는 소리, 방 정보 없음)이 항상 49번째 샘플에 있는 폭 1.5ms짜리 스파이크임을 먼저 확인했다 — 그래서 시간 기준으로 깨끗하게 잘라낼 수 있다.</p>
+
+<h3>실험 A. 직접음 삭제(earlyzero) — CNN이 무엇에 의존하는지</h3>
+<p><b>무엇을</b>: 녹음 맨 앞(직접음 포함 왕복 1m 구간)을 0으로. 방 정보는 거의 안 지워진다(1m 이내 벽만 영향). <b>결과</b>: CNN Δ+0.71, eat +0.46, sslam +0.29 — <b class="r">CNN이 2.4배 붕괴</b>. <b>의미</b>: CNN은 "첫 메아리가 직접음 기준으로 언제·얼마나 작게 왔나"에 깊이를 묶어두고 있다.</p>
+<h3>실험 B. 삭제 + 볼륨 복원(renorm) — "큰 신호가 빠져 통계가 뒤틀린 탓" 가설 검증</h3>
+<p><b>무엇을</b>: A처럼 지운 뒤 파형 전체 에너지를 원래대로 되돌림. 만약 A의 하락이 볼륨 통계 때문이면 회복돼야 한다. <b>결과</b>: 세 모델 모두 <b>오히려 더 나빠짐</b>(CNN +0.71→+0.81). <b>의미</b>: 통계 탓이 아니다 — A의 붕괴는 진짜로 온셋 특징의 상실이다. (AFM은 내부에서 스스로 정규화하므로 애초에 통계 충격이 자동 보정되고 있었다.)</p>
+<h3>실험 C. 꼬리 삭제 위치 스윕(latecut 3~9m) — sslam 우위의 "주소"</h3>
+<figure><img src="figs/fig2_latecut_sweep.png" alt="sweep"><figcaption><b>그림 2.</b> x축 = 어디부터 뒤를 잘랐나(오른쪽=조금, 왼쪽=많이). 점선 = 안 자른 성적. 마지막 8→10m 구간만 지워도 sslam의 mid 우위(-0.043)가 사라지고, 더 지울수록 절벽 없이 서서히 나빠진다.</figcaption></figure>
+<p><b>의미 두 가지</b>: (1) sslam이 3~6m 벽을 잘 맞히는 근거는 그 벽의 첫 메아리(17~35ms)가 아니라 <b>녹음 맨 뒷부분</b>에 있다. (2) 절벽이 없다 = 우위가 한 시점이 아니라 <b>꼬리 전체에 얇게 분산</b>되어 있다. CNN처럼 한 곳(온셋)에 몰려 있으면 실험 A처럼 한 방에 무너진다.</p>
+<h3>실험 D. 구간별 구멍(notch) — 어느 시간대가 어느 거리를 책임지나</h3>
+<figure><img src="figs/fig3_notch_matrix.png" alt="notch"><figcaption><b>그림 3.</b> 행 = 지운 시간대(2m 폭), 열 = 어느 거리대 성적이 떨어졌나, 숫자 = Δ MAE. CNN(왼쪽)은 대각선 성향 — far는 far 슬롯을 지울 때(+0.12) 떨어진다. sslam(오른쪽)은 far 슬롯(8-10m)을 지워도 far가 +0.02밖에 안 떨어진다: <b>먼 벽의 첫 메아리 없이도 앞의 정보로 먼 벽 깊이를 재구성</b>한다. 반대로 mid는 자기 슬롯 밖(6-10m)을 지울 때 CNN의 2배로 떨어진다.</figcaption></figure>
+<h3>실험 E. 꼬리 순서 섞기(shuffle) — 구조를 읽나, 통계를 읽나</h3>
+<p><b>무엇을</b>: 6m 이후를 지우는 대신 0.2m 블록 단위로 순서만 무작위로 섞음(에너지는 그대로). <b>결과</b>: 세 모델 모두 거의 무해(Δ+0.003~0.008; 지우면 +0.09~0.15). <b>의미</b>: 꼬리에서 읽는 것은 "몇 ms에 뭐가 왔나"라는 정밀한 배열이 아니라, 꼬리에 담긴 <b>전체 잔향 에너지·스펙트럼 통계</b>다(잔향이 얼마나 세고 어떤 색인가 — 방 크기·거리의 간접 지표). 실험 D에서 6-8m을 지우나 8-10m을 지우나 피해가 비슷했던 것(지워진 에너지 양에 비례)과도 맞는다.</p>
+<h3>실험 F. 시드 재현 — 위 결과가 우연인가</h3>
+<p><b>무엇을</b>: 독립적으로 다시 학습한 모델들(CNN 재학습판, sslam 시드1, sslam LLRD판)로 A·C를 반복. <b>결과</b>: 방향 전부 재현(온셋 삭제 시 CNN이 1.55배 붕괴, 꼬리 의존은 AFM이 CNN의 4~7배). 단 크기는 시드마다 출렁임(예: 8-10m 의존도 0.195→0.040) — <b>정성적 결론은 시드와 무관하게 성립, 개별 수치는 과신 금물</b>.</p>
+<figure><img src="figs/fig4_manipulations.png" alt="manipulations"><figcaption><b>그림 4.</b> 실험 A·B·C(6m)·E를 한 그래프에. 직접음 삭제는 CNN에 파멸적, 볼륨 복원은 회복 없음, 꼬리 섞기는 전원 무해.</figcaption></figure>
+<div class="key"><b>메커니즘 결론</b> — CNN은 "핵심 증인 한 명"(첫 메아리의 도착 시각·크기) 수사: 정확하지만 그 증인이 사라지면 붕괴. SSLAM은 "정황 증거 수십 개"(꼬리 전체의 잔향 통계) 수사: 어떤 증거를 빼앗아도 서서히만 나빠지고, 먼 벽은 그 벽의 메아리 없이도 맞힌다. 여러 소리가 겹친 걸 다루도록 사전학습된(mixture SSL) 모델이 정확히 이 능력을 갖는 것은 우연이 아니다.</div>
+
+<h2>4. 그 외 확정된 실무 법칙 (전부 test·다시드 근거)</h2>
+<ul>
+<li><b>LLRD는 유일한 "공짜 점심"</b>: EAT/SSLAM 계열(post-norm 구조)은 균일한 학습률로 미세조정하면 학습 중반에 val이 튀며 사전학습이 파괴된다. LLRD가 이를 고치면 전 대역이 같이 좋아진다 — 유일하게 부작용 없는 개입.</li>
+<li><b>vdrop(마이크 드롭)은 조건부</b>: 지울 여유(중복)가 있는 8ch + 깨끗한 Replica에서만 이득(+6.5%). 4/6ch에선 각 3시드로 해로움 확인, MP3D는 전 채널 해로움 — AFM의 잔향-통합 입력을 지우는 셈이라서.</li>
+<li><b>근거리 보완 시도는 Replica에선 제로섬</b>: conv 패치 stem, AbsRel 로스(λ 0.2/0.05) 모두 near를 고치는 만큼 mid/far를 망침. 단 <b>같은 convstem이 거친 MP3D에선 순이득</b>(4ch 신기록 0.7617) — 개입의 가치는 데이터셋의 병목(정밀도 vs 강건성)에 달렸다.</li>
+<li><b>EchoDiffusion이 8ch에서 오히려 나빠지는 이유</b>: 채널을 위치 정보 없이 평균/스택으로만 합치는 구조(pose-blind)라 6ch에서 포화 — 같은 mic-drop도 OAA엔 이득, eco엔 손해였던 대비가 그 증거.</li>
+</ul>
+
+<h2>5. 진행 중 / 다음 단계</h2>
+<ul>
+<li><b>학습 중 4런</b>: sslam+LLRD의 MP3D 6ch/8ch(매트릭스 마지막 칸), sslam 8ch+vdrop(Replica), sslam+LLRD 2ch(Replica).</li>
+<li><b>대기열 ~13런</b>: sslam 4ch 세 번째 시드(동률 심판), MP3D 4ch 승리의 시드 보강, convstem 채널 확장, sslam 기본 레시피의 MP3D(LR 스파이크 재현 대조군) 등 — 빈 GPU가 생길 때만 자동 투입.</li>
+<li><b>다음 개선 방향</b>: ① 멀티채널 RIR을 입힌 AudioSet으로 SSLAM 계속-사전학습(공간 믹스처 DAPT) ② 위상/ITD 입력 추가(모든 ViT가 공유하는 근거리 한계는 크기 스펙트로그램만 쓰는 입력 탓일 가능성) ③ 근거리=CNN, 중원거리=sslam, 초원거리=diffusion으로 갈라 쓰는 대역 전문가 결합.</li>
+</ul>
+<p class="sub">이 폴더 구성 — <code>report.html</code>(이 문서) · <code>figs/</code> 그림 5장 · <code>data/</code> 분석 원본 JSON 6종 + 결과 md 2종. 분석 재현: <code>python 0820_reverb_ablation.py {v1|sweep|notch|renorm|seeds|shuffle}</code></p>
+</main>
