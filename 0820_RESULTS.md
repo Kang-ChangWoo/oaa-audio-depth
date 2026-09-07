@@ -307,3 +307,28 @@ any component deletion, cross-slot integration (far reconstructed without far pr
 better extraction of aggregate tail statistics — consistent with mixture-SSL pretraining teaching
 robust spectral statistics under superposition. Four independent manipulations (earlyzero+renorm,
 latecut sweep, notch matrix, shuffle-tail) and a seed replication all point the same way.
+
+## Mechanism campaign, round 4 (2026-09-07/08): the four causal-gap controls
+
+G. **Timing vs amplitude split**: shifting the direct impulse +0.2 m (amplitude preserved) breaks
+all three models similarly (d +0.59..0.74, CNN/sslam ratio 1.26) — the temporal anchor is a shared
+strategy. Scaling the direct impulse to 0.25x (position preserved) breaks CNN 2.7x more than sslam
+(+0.463 vs +0.175) — the model-separating dependence is AMPLITUDE calibration (echo-to-direct
+ratio), not timing per se.
+H. **Shuffle block-size sweep** (1 m -> 0.02 m): all deltas stay <= +0.009 at every scale.
+Bag-of-patches is rejected along with fine-timing: the tail cue is aggregate energy/spectral
+envelope surviving the STFT window — required temporal resolution ~ none.
+I. **First-window x tail 2x2** (notch 3-6 m, 8-10 m, both): mid-band damage is SUBadditive for
+sslam only (0.994 predicted vs 0.943 observed — partial redundancy/substitution between sources);
+superadditive for CNN (0.167->0.224) and eat (0.819->1.093). Quantitative interaction evidence for
+distributed/redundant encoding.
+F+. **Seed replication of mechanism magnitudes**: sslam tail dependence is stable across
+independent trainings (latecut6 d = 0.113/0.109/0.133); shuffle harmlessness reproduces everywhere
+(<=0.016). CNN's latecut magnitude swings 5x across checkpoints (0.146 fin vs 0.030 vw; vw's
+recipe includes view weighting so it is not a pure seed replicate) — the claim "the CNN also
+depends heavily on the tail" is RETRACTED; strong CNN claims rest only on seed-reproduced
+manipulations (earlyzero 1.55-2.4x, amplitude 2.7x).
+
+Also: unified-setting Replica r2 landed — sslam_llrd_r2_rep test 0.2805 vs CNN 0.2894: gap 0.0089
+< 0.01 -> TIE under the pre-registered rule (sslam default recipe 0.2711 remains a win; the
+LLRD-on-Replica cost ~ +0.005..0.009 reproduces at r2 and r6).
