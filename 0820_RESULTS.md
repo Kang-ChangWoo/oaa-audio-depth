@@ -180,3 +180,38 @@ much reverb structure they preserve.
 3. *Band-expert routing*: CNN(near) + sslam(mid/far) + eco(far prior) behind a range-gated head —
    the 3-model metric table shows they are complementary by construction.
 4. *sslam multi-seed everywhere + r8-vd cell* (3k, in flight) to finish the symmetric-win claim.
+
+## Per-method channel x dataset matrices (test MAE; rows=channels, cols=dataset; blank=not run)
+
+Multi-seed cells are mean±std; "(t)" = training as of 2026-09-07. WIN = beats the paper CNN cell.
+
+OAA-CNN (paper baseline)          eat + LLRD
+| ch | Replica | MP3D   |        | ch | Replica      | MP3D              |
+|----|---------|--------|        |----|--------------|-------------------|
+| 2  | 0.2894  | 0.9084 |        | 2  | 0.2762 WIN   | 0.9018 WIN        |
+| 4  | 0.2596  | 0.7849 |        | 4  | 0.2609       | 0.7717±0.002 WIN  |
+| 6  | 0.2384  | 0.7502 |        | 6  | 0.2427       | 0.7736            |
+| 8  | 0.2368  | 0.7467 |        | 8  | 0.2371 WIN*  | 0.7395±0.011 WIN  |
+                                  (*r8 Replica = +vdrop; r8 MP3D = no-vdrop, 3 seeds each)
+
+sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
+| ch | Replica          | MP3D  ||  ch | Replica    | MP3D                        |
+|----|------------------|-------||-----|------------|-----------------------------|
+| 2  | 0.2711 WIN       |       ||  2  |            | 0.8991 WIN                  |
+| 4  | 0.2553 WIN       | 0.8335||  4  | 0.2575 WIN | 0.7920/0.7714(llrd65) WIN   |
+| 6  | 0.2336±0.005 WIN |       ||  6  | 0.2385 tie | (t)                         |
+| 8  | 0.2399 novd/(t)vd|       ||  8  | (t = sslam_r8vd_rep)| (t)                |
+
+EchoDiffusion                     eat+LLRD+convstem
+| ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
+|----|---------|------------|    |----|-------------|------------------|
+| 2  | 0.2854  | 0.9007 WIN |    | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
+| 4  | 0.2695  | 0.7928     |
+| 6  | 0.2556  | 0.7786     |
+| 8  | 0.2600  | 0.7572     |
+
+Read: the CNN is uniformly strong but no longer holds first place in most cells; sslam swept the
+Replica column (3/4 cells rank-1); sslam+LLRD started winning the MP3D column (2ch, 4ch); the three
+blank/(t) cells are exactly the stage-3k runs in flight. Rejected-everywhere rows (AbsRel losses,
+audiomosaic/bat/m2d families, vdrop off-law cells) are kept out of these matrices — see the stage
+sections above for their full numbers.
