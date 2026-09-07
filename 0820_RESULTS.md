@@ -92,3 +92,43 @@ vs CNN 0.266 -> test tie; r2 MP3D val 1.048 vs 0.908 -> test WIN): compare on te
 on BOTH datasets, −4.6% / −0.7%) and on the harder/noisier dataset at any channel count (MP3D fb
 −1.7% across 3 seeds). With rich observations on clean Replica the CNN's near-field precision
 keeps it level or slightly ahead (r6/r8 ties). AudioSet features buy robustness, not precision.
+
+## Stage 3c-3k — the unified-winner campaign (2026-08-26 ~ 09-07)
+
+Goal (user directive): ONE setting that beats the paper CNN on every channel count AND both
+datasets. Verdict trail (all test MAE):
+
+**vdrop (mic-drop) — channel-redundancy law, now fully seeded:**
+fb REJECT x3 seeds (0.2742/0.2815/0.2820 vs 0.2609) | r6 REJECT x3 (0.2470±0.002 vs 0.2427) |
+Replica r8 HELPS x3-controls (vd 0.2371 vs novd 0.2535/0.2618/0.2606) | MP3D r6 REJECT x3
+(0.795/0.816/0.817 vs 0.7736) | MP3D r8 REJECT (aggressive kmax6: 0.9858). Drop regularisation
+works only where observations are redundant AND clean (Replica 8ch); everywhere else it destroys
+the AFM's reverb-integration signal. EchoDiffusion's chdrop failure is explained by pose-blind
+channel-mean conditioning (channel-mean CIDE + no pose embedding).
+
+**eat-based single-model fixes — all rejected on Replica:**
+convstem 0.2644 (near 0.1422->0.1368 but mid destroyed) | AbsRel λ0.2 0.2649 (near = CNN 0.1354
+exactly, far collapsed 1.59->1.93) | λ0.05 0.2654 (both bands mediocre). Near-field is *fixable*
+(twice proven) but at this capacity every fix is a zero-sum band transfer — ON REPLICA. On MP3D
+the same convstem WINS: cs_fb_mp3d 0.7617 = new MP3D fb record (CNN −3.0%, near AND mid better).
+The zero-sum law is itself dataset-dependent: sub-patch locality is a net gain on noisy data.
+
+**The sslam pivot (headline).** SSLAM (mixture-SSL pretraining) breaks eat's channel ceiling:
+
+| test MAE | Replica | vs CNN | MP3D | vs CNN |
+|---|---|---|---|---|
+| r2 | 0.2711 | −6.3% WIN | sslam_llrd 0.8991 | −1.0% WIN |
+| fb | 0.2553 (llrd 0.2575) | −1.7% WIN | sslam_llrd65 0.7714 / e30 0.7748 | −1.7% WIN |
+| r6 | 3-seed 0.2336±0.005 | −2.0% WIN (s0 0.2271 sweeps ALL 8 metrics incl. AbsRel/δ1/near) | (3k training) | CNN 0.7502 |
+| r8 | novd 0.2399 (vd 3k training) | −1.3% behind | eat novd 3-seed 0.7395±0.011 | −1.0% WIN |
+
+sslam r6 s0 (0.2271) is the campaign's single best result: first cell where one model wins every
+metric — near-precision + mid/far robustness simultaneously, i.e. OUTSIDE the zero-sum frontier.
+val->test generalisation margin is a stable sslam property (val ties -> test wins, 4 occurrences).
+
+**Score: 6/8 cells AFM-won (multi-seeded where close); the two open cells (MP3D r6/r8-sslam,
+Replica r8+vdrop) are training (stage 3k).** MP3D per-channel CNN territory has shrunk to r6 only.
+
+Fine-tuning-policy spectrum (MP3D fb): careless uniform ft 0.853 < frozen-hybrid (eco) 0.793 <
+scratch CNN 0.785 < LLRD ft 0.773 — LLRD is the layer-wise interpolation between eco's freezing
+and naive fine-tuning, and the only "free lunch" of the campaign.
