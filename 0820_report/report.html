@@ -54,16 +54,16 @@ dl div{margin:4px 0}
 </dl>
 
 <h2>3. 결과 I — 개선은 어디서 발생하는가</h2>
-<p>여덟 개의 평가 칸(채널 4 × 데이터셋 2)을 놓고 보면, 결과의 구조는 "AFM이 이겼다"는 한 문장보다 훨씬 정보량이 많다. 아래 표와 그림 1이 보여주는 패턴은 이렇다. 관측이 두 개뿐인 r2에서는 두 데이터셋 모두에서 AFM이 명확히 이긴다(Replica −6.3%, MP3D −1.0%). 관측이 넷인 fb에서는 어려운 MP3D에서 시드 3개 전승으로 이기고(0.7717±0.002 vs 0.785), 깨끗한 Replica에서는 시드 평균이 CNN과 0.0001 차이 — 판정 규칙상 동률이다. 관측이 여섯인 r6에서 Replica는 SSLAM이 시드 3개 평균 −2.0%로 이기며, 특히 시드 0은 여덟 개 지표 전부(MAE·RMSE·AbsRel·δ1·근·중·원)를 동시에 이긴 캠페인 유일의 사례다. 반면 MP3D r6는 현재까지 CNN이 지키는 유일한 칸이다(eat 기준 +3.1%; sslam 판은 학습 중). 관측이 가장 많은 r8은 Replica에서 동률, MP3D에서 시드 3개 평균 −1.0% 승리다.</p>
+<p>여덟 개의 평가 칸(채널 4 × 데이터셋 2)을 놓고 보면, 결과의 구조는 "AFM이 이겼다"는 한 문장보다 훨씬 정보량이 많다. 아래 표와 그림 1이 보여주는 패턴은 이렇다. 관측이 두 개뿐인 r2에서는 두 데이터셋 모두에서 AFM이 명확히 이긴다(Replica −6.3%, MP3D −1.0%). 관측이 넷인 fb에서는 어려운 MP3D에서 시드 3개 전승으로 이기고(0.7717±0.002 vs 0.785), 깨끗한 Replica에서는 시드 평균이 CNN과 0.0001 차이 — 판정 규칙상 동률이다. 관측이 여섯인 r6에서 Replica는 SSLAM이 시드 3개 평균 −2.0%로 이기며, 특히 시드 0은 여덟 개 지표 전부(MAE·RMSE·AbsRel·δ1·근·중·원)를 동시에 이긴 캠페인 유일의 사례다. 반면 MP3D r6는 현재까지 CNN이 지키는 유일한 칸이다(eat 기준 +3.1%; sslam 판은 학습 중). 관측이 가장 많은 r8은 Replica에서 정확한 동률(sslam+vdrop 0.2368 = CNN 0.2368; RMSE와 원거리는 sslam이 낫고 근거리는 CNN이 낫다), MP3D에서 시드 3개 평균 −1.0% 승리다. 이로써 Replica 열이 완성되는데, sslam은 네 채널 어디서도 지지 않고 두 채널에서 이긴다.</p>
 <figure><img src="figs/fig1_channel_scaling.png" alt="channel scaling"><figcaption><b>그림 1.</b> 채널 수에 따른 test MAE. 모든 모델이 관측이 늘수록 좋아지지만 기울기가 다르며, 이 기울기의 차이가 §4의 주제다. sslam의 MP3D 6/8ch 점은 학습 중이라 비어 있다.</figcaption></figure>
 <div class="tw"><table>
 <tr><th>test MAE (m)</th><th>Rep 2ch</th><th>Rep 4ch</th><th>Rep 6ch</th><th>Rep 8ch</th><th>MP3D 2ch</th><th>MP3D 4ch</th><th>MP3D 6ch</th><th>MP3D 8ch</th></tr>
 <tr><td>OAA-CNN (논문)</td><td>0.2894</td><td>0.2596</td><td>0.2384</td><td>0.2368</td><td>0.9084</td><td>0.7849</td><td class="w">0.7502</td><td>0.7467</td></tr>
 <tr><td>eat+LLRD</td><td class="w">0.2762</td><td>0.2609</td><td>0.2427</td><td>0.2371¹</td><td class="w">0.9018</td><td class="w">0.7717±.002</td><td>0.7736</td><td class="w">0.7395±.011</td></tr>
-<tr><td>sslam(+LLRD)</td><td class="w">0.2711</td><td>0.2553² (tie)</td><td class="w">0.2336±.005</td><td>0.2399³</td><td class="w">0.8991</td><td class="w">0.7714⁴</td><td>학습중</td><td>학습중</td></tr>
+<tr><td>sslam(+LLRD)</td><td class="w">0.2711</td><td>0.2553² (tie)</td><td class="w">0.2336±.005</td><td>0.2368³ (tie)</td><td class="w">0.8991</td><td class="w">0.7714⁴</td><td>학습중</td><td>학습중</td></tr>
 <tr><td>EchoDiffusion</td><td>0.2854</td><td>0.2695</td><td>0.2556</td><td>0.2600</td><td class="w">0.9007</td><td>0.7928</td><td>0.7786</td><td>0.7572</td></tr>
 </table></div>
-<p style="font-size:.88rem;color:var(--sub)">¹Rep 8ch만 vdrop(§5). ²시드 2개 평균 0.2595 vs CNN 0.2596 — 동률; 세 번째 시드 대기열. ³vdrop 없는 판; vdrop 판 학습 중(중간 val은 이미 추월). ⁴LLRD 감쇠 0.65, 단일 시드. 초록 = 판정 규칙상 승.</p>
+<p style="font-size:.88rem;color:var(--sub)">¹Rep 8ch만 vdrop(§5). ²시드 2개 평균 0.2595 vs CNN 0.2596 — 동률; 세 번째 시드 대기열. ³vdrop 판 최종: MAE가 CNN과 소수 4자리까지 동률(0.2368; RMSE·far는 우위, near·mid는 열위). vdrop 없는 판 0.2399. ⁴LLRD 감쇠 0.65, 단일 시드. 초록 = 판정 규칙상 승.</p>
 <p>이 패턴은 우연으로 보기 어렵다. 사전학습 표현의 부가가치는 데이터만으로 답이 결정되지 않을 때 발생한다는 일반 원리를 그대로 따르고 있기 때문이다. 마이크 두 개로는 삼각측량이 성립하지 않아 잔향 통계 같은 간접 증거가 답을 좌우하고 — 그래서 r2에서 항상 이긴다. 관측이 여덟 개면 깨끗한 데이터에서는 기하가 데이터만으로 거의 결정되어 사전지식의 여지가 줄고 — 그래서 Replica 고채널은 동률로 수렴한다. 그러나 데이터가 어지러운 MP3D에서는 관측이 많아도 강건한 표현의 값이 남는다 — 그래서 MP3D r8에서도 이긴다. 요컨대 <b>개선은 "얼마나 많은 칸"의 문제가 아니라 "문제가 어려운 곳"의 문제</b>이며, 이것이 우리의 첫 번째 주장이 정확히 의미하는 바다.</p>
 
 <h2>4. 결과 II — 어느 사전학습이 전이되는가, 그리고 왜 그것이 임의적이지 않은가</h2>

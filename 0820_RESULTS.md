@@ -332,3 +332,9 @@ manipulations (earlyzero 1.55-2.4x, amplitude 2.7x).
 Also: unified-setting Replica r2 landed — sslam_llrd_r2_rep test 0.2805 vs CNN 0.2894: gap 0.0089
 < 0.01 -> TIE under the pre-registered rule (sslam default recipe 0.2711 remains a win; the
 LLRD-on-Replica cost ~ +0.005..0.009 reproduces at r2 and r6).
+
+**Replica column CLOSED (2026-09-08)**: sslam_r8vd_rep test MAE 0.2368 — equal to the paper CNN to
+4 decimals (RMSE 0.4785 vs 0.4810 and far 1.435 vs 1.589 better; near/mid worse). The r8 vdrop law
+transfers to sslam (novd 0.2399 -> vd 0.2368). Final Replica verdicts for the sslam family:
+r2 WIN (-0.018) / fb tie (2 seeds, s2 arbiter running) / r6 WIN (3 seeds) / r8 exact tie.
+sslam never loses a Replica cell.
