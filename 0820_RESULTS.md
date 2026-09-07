@@ -338,3 +338,9 @@ LLRD-on-Replica cost ~ +0.005..0.009 reproduces at r2 and r6).
 transfers to sslam (novd 0.2399 -> vd 0.2368). Final Replica verdicts for the sslam family:
 r2 WIN (-0.018) / fb tie (2 seeds, s2 arbiter running) / r6 WIN (3 seeds) / r8 exact tie.
 sslam never loses a Replica cell.
+
+**fb Replica arbiter (s2) landed**: 0.2789 -> 3-seed 0.2553/0.2636/0.2789, mean 0.2659±0.012 vs
+CNN 0.2596. TIE under the <0.01 rule, leaning CNN; the early single-seed "sslam fb win" is
+formally retired. sslam fb seed spread (0.012) is the largest measured. Final Replica column
+(sslam family): r2 WIN / fb TIE / r6 WIN (3 seeds) / r8 exact TIE — never loses, clear wins at
+r2 and r6.
