@@ -24,7 +24,7 @@ while [ $i -lt ${#SJOBS[@]} ]; do
   for g in $GPUS; do
     [ $i -ge ${#SJOBS[@]} ] && break
     mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i $g)
-    if [ "$mem" -lt 2000 ]; then
+    if [ "$mem" -lt 10000 ]; then
       IFS='|' read -r name dm extra <<< "${SJOBS[$i]}"
       if [ -e "comparison_0820/logs/$name.log" ]; then i=$((i+1)); continue; fi
       echo "[dispatch] $name -> GPU $g ($(date +%m/%d\ %H:%M))"
