@@ -215,3 +215,29 @@ Replica column (3/4 cells rank-1); sslam+LLRD started winning the MP3D column (2
 blank/(t) cells are exactly the stage-3k runs in flight. Rejected-everywhere rows (AbsRel losses,
 audiomosaic/bat/m2d families, vdrop off-law cells) are kept out of these matrices — see the stage
 sections above for their full numbers.
+
+## Mechanism experiment: late-reverb / early-arrival ablation (test-time, no training)
+
+`0820_reverb_ablation.py` masks the test waveform inside data_0422's STFT (spec cache disabled;
+clean condition reproduces compare.json to 4 decimals) and re-evaluates the SAME frozen fb models.
+Full numbers: comparison_0820/reverb_ablation.json.
+
+dMAE vs clean (Replica fb test):
+| perturbation | CNN | eat_llrd | sslam |
+|---|---|---|---|
+| earlyzero1m (delete direct/early, keep tail) | +0.706 (near +0.431) | +0.459 | +0.293 (mid only +0.67) |
+| latecut6m (delete tail, keep <6m primaries)  | +0.146 | +0.094 | +0.113 (dmid MAX +0.618) |
+| latecut4m | +0.325 | +0.254 | +0.271 |
+
+Three verdicts: (1) the CNN binds depth to local early arrival-time cues — deleting them breaks it
+2.4x harder than sslam; (2) sslam's mid-band advantage lives in the late tail — with mid-surface
+primaries preserved but the tail cut, its clean-time mid edge (−0.043) vanishes and inverts, the
+largest dmid of the three models; (3) the naive total-dMAE prediction (dSSLAM >> dCNN under latecut)
+is refuted in an informative way: sslam degrades LEAST under every deletion (far d +0.556 vs CNN
++0.782 even under latecut) — its representation is *distributed*, reconstructing from whatever
+component survives, while the CNN is the most fragile under any distribution shift (even its near
+band doubles sslam's dnear under latecut). Mechanism sentence: mixture-SSL transfers to
+echo-geometry because it encodes depth in distributed reverberant structure; the task CNN relies on
+local arrival-time cues. This also explains the pretraining-objective far>6 ranking (mixture <
+masked < contrastive < gated): objectives differ in how much of that distributed structure they
+preserve.
