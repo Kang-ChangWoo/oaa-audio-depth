@@ -37,8 +37,17 @@ def _masked(wav2):
         w = w.clone(); w[:, :int(ABL["m"] * SPM)] = 0
     elif ABL["mode"] == "notch":
         w = w.clone(); w[:, int(ABL["m"] * SPM):int(ABL["m2"] * SPM)] = 0
+    elif ABL["mode"] == "ampdirect":         # direct impulse amplitude x f, position preserved
+        w = w.clone(); w[:, :200] = w[:, :200] * ABL["m"]
+    elif ABL["mode"] == "shiftdirect":       # direct impulse shifted +k samples, amplitude preserved
+        k = int(ABL["m"]); w2 = w.clone(); seg = w[:, :200].clone()
+        w2[:, :200] = 0; w2[:, k:k+200] = w2[:, k:k+200] + seg; w = w2
+    elif ABL["mode"] == "notch2":            # two notches: [m,m2] and [m3,m4] (metres)
+        w = w.clone()
+        w[:, int(ABL["m"]*SPM):int(ABL["m2"]*SPM)] = 0
+        w[:, int(ABL["m3"]*SPM):int(ABL["m4"]*SPM)] = 0
     elif ABL["mode"] == "shuffle":
-        i0 = int(ABL["m"] * SPM); blk = 56                 # 0.2 m blocks
+        i0 = int(ABL["m"] * SPM); blk = int(ABL.get("blk", 56))                 # 0.2 m blocks
         w = w.clone(); seg = w[:, i0:]
         n = seg.shape[1] // blk
         g = torch.Generator().manual_seed(0)
@@ -71,6 +80,20 @@ elif SET == "seeds":
     MODELS = {"cnn_vw": "oaa_fb_vw", "sslam_s1": "0820_sslam_s1_fb_rep", "sslam_llrd": "0820_sslam_llrd_fb_rep"}
     CONDS = [("clean", 0.0), ("earlyzero", 1.0), ("latecut", 8.0)]
     OUT = "comparison_0820/reverb_ablation_seeds.json"
+elif SET == "timing_amp":
+    CONDS = [("clean", 0.0), ("ampdirect", 0.25), ("ampdirect", 4.0),
+             ("shiftdirect", 58), ("shiftdirect", 116)]
+    OUT = "comparison_0820/reverb_ablation_timing_amp.json"
+elif SET == "blocksweep":
+    CONDS = [("clean", 0.0)] + [("shuffleblk", b) for b in (6, 28, 140, 280)]
+    OUT = "comparison_0820/reverb_ablation_blocksweep.json"
+elif SET == "cross2x2":
+    CONDS = [("notch", (3.0, 6.0)), ("notch2", (3.0, 6.0, 8.0, 10.0))]
+    OUT = "comparison_0820/reverb_ablation_cross2x2.json"
+elif SET == "seedmech":
+    MODELS = {"cnn_vw": "oaa_fb_vw", "sslam_s1": "0820_sslam_s1_fb_rep", "sslam_llrd": "0820_sslam_llrd_fb_rep"}
+    CONDS = [("clean", 0.0), ("latecut", 6.0), ("shuffle", 6.0)]
+    OUT = "comparison_0820/reverb_ablation_seedmech.json"
 elif SET == "notch":
     CONDS = [("clean", 0.0), ("notch", (2.0, 4.0)), ("notch", (4.0, 6.0)),
              ("notch", (6.0, 8.0)), ("notch", (8.0, 10.0))]
@@ -81,12 +104,19 @@ def main():
     dev = torch.device("cuda")
     out = {}
     for mode, m in CONDS:
-        if mode == "notch":
+        if mode == "shuffleblk":
+            ABL["mode"], ABL["m"], ABL["blk"] = "shuffle", 6.0, m
+            cname = f"shuffle6m_blk{m}smp"
+        elif mode == "notch2":
+            ABL["mode"] = mode; ABL["m"], ABL["m2"], ABL["m3"], ABL["m4"] = m
+            cname = f"notch{m[0]:g}-{m[1]:g}+{m[2]:g}-{m[3]:g}m"
+        elif mode == "notch":
             ABL["mode"], ABL["m"], ABL["m2"] = mode, m[0], m[1]
             cname = f"notch{m[0]:g}-{m[1]:g}m"
         else:
             ABL["mode"], ABL["m"] = mode, m
-            cname = mode if mode == "clean" else f"{mode}{m:g}m"
+            ABL["blk"] = 56
+            cname = mode if mode == "clean" else f"{mode}{m:g}" + ("smp" if mode == "shiftdirect" else "x" if mode == "ampdirect" else "m")
         out[cname] = {}
         for tag, run in MODELS.items():
             rd = resolve_run(run, ["comparison", "comparison_0820"])
