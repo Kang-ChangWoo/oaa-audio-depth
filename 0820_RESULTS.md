@@ -143,6 +143,19 @@ and naive fine-tuning, and the only "free lunch" of the campaign.
 | BAT | "BAT: Better Audio Transformer Guided by Convex Gated Probing", H. Ghaffari, L. Rauch et al. (arXiv:2602.16305) | gated probing (convex gates suppress non-discriminative regions) | lrauch/BAT-vit-b16-pretrainedAS2M |
 | M2D / M2D-CLAP | "Masked Modeling Duo", D. Niizumi et al., ICASSP 2023 / TASLP; M2D-CLAP (Interspeech 2024, 2025 ckpt) | masked prediction duo (+CLAP semantic alignment) | nttcslab m2d_clap_vit_base-*-2025 |
 
+**Where the pretrained parameters come from / live locally.** Nothing is stored in git.
+HF-hosted weights (EAT / SSLAM / AudioMosaic / BAT) are auto-downloaded by
+`model/audio_backbones_0820.py` via huggingface_hub into `$AFM_WEIGHTS`
+(= `/root/local1/changwoo/_afm_weights`, exported by every `0820_queue_*.sh`; HF_HOME defaults
+there too). Present on disk under `hub/`: models--worstchan--EAT-base_epoch30_pretrain (344M),
+models--ta012--SSLAM_pretrain (344M), models--hanxunh--AudioMosaic-vit-b16-pretrained (329M),
+models--lrauch--BAT-vit-b16-pretrainedAS2M (354M). The M2D family is NOT on HF as loadable
+checkpoints for our loader — the .pth zips were fetched from the NTT-CSLab M2D release
+(github.com/nttcslab/m2d) into `$AFM_WEIGHTS/m2d/`: m2d_clap_vit_base-80x1001p16x16p16kpBpTI-2025
+(checkpoint-30.pth = "m2d"), ...p80x2... (= "m2d20ms"), m2d_vit_base-80x608p16x16-221006-mr7_enconly
+(checkpoint-300.pth = "m2d_plain"). Loading is fail-fast: a missing/corrupt checkpoint aborts the
+run (`pretrained loaded: YES` is asserted in the trainer), so every result row used real weights.
+
 All ViT-B/16 on AudioSet-2M -> backbone differences isolate the OBJECTIVE. Replica fb far>6 band
 ranks exactly by objective type: mixture-SSL 1.446 (sslam) < masked-pred 1.546 (eat) < CLAP-masked
 1.651 (m2d) < contrastive 1.653 (audiomosaic) < gated 1.875 (bat). near<3 is a 0.003-wide tie
