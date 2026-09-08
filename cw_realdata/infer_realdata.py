@@ -46,6 +46,7 @@ ap.add_argument("--run", default="0820_sslam_llrd_r8vd_rep",
 ap.add_argument("--data-module", default="data_0422", help="data_0422 (Replica) or data_mp3d")
 ap.add_argument("--tag", default="", help="output filename suffix (e.g. _mp3d)")
 ap.add_argument("--audio-dir", default="clipped_audio", help="dir (under cw_realdata) with mono_{deg}deg_clip_1s.wav")
+ap.add_argument("--out-dir", default="", help="output dir (under cw_realdata; default cw_realdata itself)")
 ARGS = ap.parse_args()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
@@ -59,7 +60,8 @@ from core.data import get_data_module
 from core.ckpt import build
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RUN = os.path.join(os.path.dirname(HERE), "comparison_0820", ARGS.run)
+REPO = os.path.dirname(HERE)
+RUN = os.path.join(REPO, ARGS.run) if "/" in ARGS.run else os.path.join(REPO, "comparison_0820", ARGS.run)
 DIRECT_AT = 49          # training direct-spike sample index @48k
 
 # channel order = data_0422 r8; nominal ear azimuth assuming L = yaw+90, R = yaw-90
@@ -105,18 +107,22 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     ck = torch.load(os.path.join(RUN, "best.pth"), map_location="cpu", weights_only=False)
     model, dmode, nch, kind, poses = build(ck["args"], DM)
-    assert dmode == "r8" and nch == 8 and kind == "spec"
+    assert dmode == "r8" and nch == 8
     model.load_state_dict(ck["state_dict"]); model.to(dev).eval()
     max_depth = ck["args"].get("max_depth", 10.0)
 
+    x = spec if kind == "spec" else wav8.unsqueeze(0)          # echoscan consumes raw waveform
+    fwd = (lambda z: model(z, view_poses=poses)) if poses is not None else model
     with torch.no_grad():
-        pred = (model(spec.to(dev), view_poses=poses).float() * max_depth).squeeze().cpu().numpy()
+        pred = (fwd(x.to(dev)).float() * max_depth).squeeze().cpu().numpy()
         # mirrored variant: swap L/R mic assignment within each pair (handedness unknown)
         idx = [1, 0, 3, 2, 5, 4, 7, 6]
-        pred_m = (model(spec[:, idx].to(dev), view_poses=poses).float() * max_depth).squeeze().cpu().numpy()
+        pred_m = (fwd(x[:, idx].to(dev)).float() * max_depth).squeeze().cpu().numpy()
 
-    np.save(os.path.join(HERE, "pred_depth%s.npy" % ARGS.tag), pred)
-    np.save(os.path.join(HERE, "pred_depth_mirror%s.npy" % ARGS.tag), pred_m)
+    OUT = os.path.join(HERE, ARGS.out_dir) if ARGS.out_dir else HERE
+    os.makedirs(OUT, exist_ok=True)
+    np.save(os.path.join(OUT, "pred_depth%s.npy" % ARGS.tag), pred)
+    np.save(os.path.join(OUT, "pred_depth_mirror%s.npy" % ARGS.tag), pred_m)
     print("pred shape", pred.shape, "range %.2f..%.2f m mean %.2f" % (pred.min(), pred.max(), pred.mean()))
     print("mirror     range %.2f..%.2f m mean %.2f" % (pred_m.min(), pred_m.max(), pred_m.mean()))
 
@@ -143,8 +149,8 @@ def main():
     ax.set_yticks(range(8)); ax.set_yticklabels([f"y{o*90} {e} (mic{CH2MIC[(o,e)]})" for o, e in order], fontsize=7)
     ax.set_xlabel("time (ms)"); ax.set_title("model inputs after alignment/normalisation")
     fig.suptitle(f"cw_realdata → {ARGS.run} · panorama defined up to 45° rotation + mirror")
-    fig.tight_layout(); fig.savefig(os.path.join(HERE, "pred_depth%s.png" % ARGS.tag), dpi=110)
-    print("saved", os.path.join(HERE, "pred_depth%s.png" % ARGS.tag))
+    fig.tight_layout(); fig.savefig(os.path.join(OUT, "pred_depth%s.png" % ARGS.tag), dpi=110)
+    print("saved", os.path.join(OUT, "pred_depth%s.png" % ARGS.tag))
 
 if __name__ == "__main__":
     main()

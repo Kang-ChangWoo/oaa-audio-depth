@@ -50,3 +50,14 @@ python3 cw_realdata/infer_realdata.py --run 0820_eatllrd_r8novd_mp3d --data-modu
   MP3D판 0.50m@49도/3.43m@269도(스케일은 MP3D판이 전반적으로 작게).
 - 모델 간 수평선 상관 r=0.62 (첫 방 0.53보다 높음 — 코너처럼 비대칭이 강한 장면에서 합의가 좋아짐).
 - 첫 방 예측과 코너 예측의 상관은 r=-0.15: 출력이 장면에 실제로 반응한다는 (고정 prior가 아니라는) 추가 증거.
+
+## results/ — 모델 3종 × 데이터셋 2종 × 씬 2종 종합 (같은 날)
+`results/pred_depth_{scene}_{dataset}_{model}.npy/.png` + `summary_{scene}.png`(그리드)
++ `summary_{scene}_horizon.png`(수평선 오버레이). 생성: `results_summary.py`.
+- 모델: oaa(=캠페인 AFM: Replica판 sslam_llrd_r8vd / MP3D판 eatllrd_r8novd),
+  bat(BatVision bat_r8_fin), eco(EchoDiffusion eco_r8_fin / eco_r8; 전용 env,
+  `infer_realdata_eco.py` + `results/_wav48_*.npy` 사전정렬 파형 사용)
+- 관찰: OAA-AFM 두 판이 가장 깨끗한 장면 구조. BatVision/Replica는 OAA와 레이아웃 상관
+  r=0.46-0.47로 대체로 합의(스케일은 작게, med 0.4-1.1m), BatVision/MP3D는 얼룩짐.
+  EchoDiffusion/Replica는 실측 입력에서 ~1.2m 평탄 체커 텍스처로 붕괴(min 0.89/max 1.76 —
+  장면 반응 거의 없음), MP3D판도 노이즈성. 시뮬→실측 제로샷 강건성: OAA-AFM > BatVision ≫ EchoDiffusion.
