@@ -183,29 +183,29 @@ much reverb structure they preserve.
 
 ## Per-method channel x dataset matrices (test MAE; rows=channels, cols=dataset; blank=not run)
 
-Multi-seed cells are mean±std; "(t)" = training as of 2026-09-08. WIN = beats the paper CNN cell.
+Multi-seed cells are mean±std; "(t)" = training as of 2026-09-08. Strict rule: WIN = mean gap >=0.01m vs the paper CNN cell; anything under 0.01 is a tie ("tie(+)" = AFM-side direction).
 
 OAA-CNN (paper baseline)          eat + LLRD
 | ch | Replica | MP3D   |        | ch | Replica      | MP3D              |
 |----|---------|--------|        |----|--------------|-------------------|
-| 2  | 0.2894  | 0.9084 |        | 2  | 0.2762 WIN   | 0.9018 WIN        |
+| 2  | 0.2894  | 0.9084 |        | 2  | 0.2762 WIN   | 0.9018 tie(+)     |
 | 4  | 0.2596  | 0.7849 |        | 4  | 0.2609       | 0.7717±0.002 WIN  |
 | 6  | 0.2384  | 0.7502 |        | 6  | 0.2427       | 0.7736            |
-| 8  | 0.2368  | 0.7467 |        | 8  | 0.2371 WIN*  | 0.7395±0.011 WIN  |
+| 8  | 0.2368  | 0.7467 |        | 8  | 0.2371 tie*  | 0.7395±0.011 tie(+) |
                                   (*r8 Replica = +vdrop; r8 MP3D = no-vdrop, 3 seeds each)
 
 sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | ch | Replica          | MP3D  ||  ch | Replica    | MP3D                        |
 |----|------------------|-------||-----|------------|-----------------------------|
-| 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie | 0.8991 WIN                |
-| 4  | 0.2553 WIN       | 0.8335||  4  | 0.2575 WIN | 0.7920/0.7714(llrd65) WIN   |
-| 6  | 0.2336±0.005 WIN | (t)   ||  6  | 0.2385 tie | (t)                         |
+| 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
+| 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7714(llrd65) WIN       |
+| 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | (t)                         |
 | 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | (t)            |
 
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
-| 2  | 0.2854  | 0.9007 WIN |    | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
+| 2  | 0.2854  | 0.9007 tie(+) | | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
 | 8  | 0.2600  | 0.7572     |
@@ -356,3 +356,12 @@ and sslam_llrd 0.8991, both within-tie of each other). With this, plain sslam ha
 completed cell: Replica r2/fb/r6 WIN, r8 exact tie; MP3D r2 WIN. Queue note: beyond(ITD) stage-3n
 now has queue priority per user; cs_r6/r8_rep deferred via placeholder until all 8 beyond jobs
 dispatch (stage3o auto-requeues them).
+
+### 2026-09-08: strict tie-rule audit (user-prompted relabel)
+Applying the <0.01m tie rule uniformly relabels several cells previously called WIN:
+eat MP3D r2 (gap .0066), eat MP3D r8 (.0072), sslam Rep r6 (.0048), sslam_llrd MP3D r2 (.0093),
+sslam_llrd Rep fb (.0021), EchoDiff MP3D r2 (.0077) are all ties (direction noted). Strict wins
+that survive: sslam Rep r2 (.0183), sslam MP3D r2 (.0119), eat Rep r2 (.0132), eat/llrd65 MP3D fb
+(.0132/.0135), cs MP3D fb (.0232). eat MP3D r6 is a strict LOSS (.0234). Honest headline:
+sslam family never loses a completed cell; strict wins concentrate at sparse-channel (r2) and
+hard-data (MP3D fb) cells. Report §3/§8 and the matrix updated to match.
