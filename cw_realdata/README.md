@@ -35,3 +35,18 @@ CUDA_VISIBLE_DEVICES=<gpu> python3 cw_realdata/infer_realdata.py
 - 두 모델의 수평선 프로파일 상관 r=0.53(회전/미러 보정 최적 r=0.57) — "가까운 면 하나 +
   2.5-4m 벽 + 한 방향 개방부"라는 방 구조 자체는 합의, 개방부의 방위는 서로 다르게 판정
   (Replica판 ~102도 vs MP3D판 ~255도; 도메인 갭 하 제로샷의 한계로 방위 배치는 참고 수준).
+
+## batvision_corner 씬 추가 (같은 날)
+`batvision_corner.zip` → `batvision_corner_x/` (clipped_audio 8ch + 원본 mono_audio + 스테레오
+캘리브레이션 wav/json). `--audio-dir` 인자 추가로 같은 스크립트 재사용:
+```
+python3 cw_realdata/infer_realdata.py --audio-dir batvision_corner_x/batvision_corner/clipped_audio --tag _corner
+python3 cw_realdata/infer_realdata.py --run 0820_eatllrd_r8novd_mp3d --data-module data_mp3d \
+    --audio-dir batvision_corner_x/batvision_corner/clipped_audio --tag _corner_mp3d
+```
+- 결과: pred_depth_corner*.npy/.png
+- 두 모델 모두 **코너 시그니처**를 출력: 한쪽 ~90-135도 호에 0.5-1.4m의 가까운 벽 두 면,
+  반대 반구는 3.4-4.7m로 열림. Replica판 최근접 0.70m@139도/최원방 4.72m@255도,
+  MP3D판 0.50m@49도/3.43m@269도(스케일은 MP3D판이 전반적으로 작게).
+- 모델 간 수평선 상관 r=0.62 (첫 방 0.53보다 높음 — 코너처럼 비대칭이 강한 장면에서 합의가 좋아짐).
+- 첫 방 예측과 코너 예측의 상관은 r=-0.15: 출력이 장면에 실제로 반응한다는 (고정 prior가 아니라는) 추가 증거.

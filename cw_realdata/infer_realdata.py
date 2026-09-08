@@ -45,6 +45,7 @@ ap.add_argument("--run", default="0820_sslam_llrd_r8vd_rep",
                 help="checkpoint dir under comparison_0820 (e.g. 0820_eatllrd_r8novd_mp3d)")
 ap.add_argument("--data-module", default="data_0422", help="data_0422 (Replica) or data_mp3d")
 ap.add_argument("--tag", default="", help="output filename suffix (e.g. _mp3d)")
+ap.add_argument("--audio-dir", default="clipped_audio", help="dir (under cw_realdata) with mono_{deg}deg_clip_1s.wav")
 ARGS = ap.parse_args()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
@@ -71,7 +72,7 @@ CH2MIC = {  # (yaw_slot, ear) -> real mic file azimuth ("360" = 0 deg)
 }
 
 def load_mono(deg):
-    w = wave.open(os.path.join(HERE, "clipped_audio", f"mono_{deg}deg_clip_1s.wav"))
+    w = wave.open(os.path.join(HERE, ARGS.audio_dir, f"mono_{deg}deg_clip_1s.wav"))
     assert w.getframerate() == 44100 and w.getnchannels() == 1 and w.getsampwidth() == 2
     x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
     return x
