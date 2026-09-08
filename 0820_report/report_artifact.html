@@ -107,5 +107,75 @@ dl div{margin:4px 0}
 <h2>8. 결론 및 실무 권고</h2>
 <div class="key"><b>권고는 명확하다: 이 과제에서 파운데이션 모델을 쓰는 것이 옳다.</b> sslam(+LLRD) 인코더는 평가된 여덟 조건 중 어디에서도 CNN에 의미 있게 뒤지지 않으면서(유일한 열세 칸도 판정 미완), 규칙상 명확한 승은 관측이 희소하거나(r2 두 칸) 데이터가 어려운(MP3D fb) 조건 — 실전 배치에서 정작 중요한 조건들 — 에 몰려 있고, 나머지 완주 칸은 전부 동률이다. 단서는 두 가지뿐이다: 백본은 아무 것이나 되지 않고(스크리닝에서 다섯 모델 전패를 상기하라) 소리의 중첩을 다루도록 사전학습된 계열이어야 하며, 미세조정은 반드시 LLRD로 해야 한다(균일 학습률은 사전학습을 파괴해 스크래치보다 나빠진다). 본 보고서의 신중한 어조는 "쓸지 말지"가 아니라 "왜 되는지"에 대한 주장들의 강도를 조절하는 것이다.</div>
 <p>이 캠페인이 더하는 것은 "파운데이션 모델을 붙였더니 좋아졌다"는 보고가 아니다. 우리는 (i) 개선이 발생하는 조건 — 관측 희소성과 데이터 난이도 — 을 특정했고, (ii) 백본 간 차이가 사전학습 formulation의 성격과 체계적으로 대응함을 보였으며, (iii) test-time 조작의 연쇄를 통해 그 대응의 그럴듯한 작동 방식 — 초기 집중형 표현 대 분산형 표현 — 을 관찰과 가설을 구분해 가며 추적했다. 남은 인과 간극들은 명시되어 있고, 각각을 닫는 실험이 정의되어 있다. generic 오디오 사전학습이 물리 신호의 역문제로 전이되는 이유를 묻는 이 질문은, 대답이 완결되는 만큼 사전학습 설계(공간 믹스처 DAPT)와 입력 설계(위상/ITD), 그리고 대역 전문가 결합으로 되먹임될 것이다.</p>
+<!--APPENDIX_A-->
+<h2>부록 A. 칸별 전 지표 비교표</h2>
+<p>본문 표는 판정 지표(MAE)만 싣지만, MAE가 동률인 칸에서도 보조 지표는 체계적으로 갈린다. 아래 표는 여덟 평가 칸 각각에서 판정 대상 모델들의 전 지표를 같은 eval 파이프라인으로 정렬한 것이다(굵게 = 해당 칸·해당 지표 1위; δ1은 높을수록, 나머지는 낮을수록 좋음). 다시드 설정은 시드별 행을 그대로 실어 분산을 감추지 않았다. 표가 보여주는 반복 구조는 세 가지다. 첫째, 근거리(&lt;3m) 열은 거의 모든 칸에서 CNN이 1위이고, 원거리(&gt;6m) 열은 AFM이 일관되게 1위다 — MAE 동률의 내부는 "CNN=근거리 정밀, AFM=원거리·큰 오차 억제"의 교환이며, 이는 §6의 초기 국소 단서 대 분산 잔향 활용 그림과 같은 방향이다(Replica 8ch: far 1.395 vs 1.589, −12%). 둘째, 유일한 예외가 Replica 6ch 시드 0으로, 근거리까지 포함해 일곱 지표 전부에서 1위인 캠페인 유일 사례다. 셋째, EchoDiffusion은 전 칸·전 지표에서 열세이고, MP3D 6ch은 CNN이 MAE만이 아니라 지표 전반에서 방어하는 유일한 칸이다. MP3D 8ch의 vdrop 판(0.9858)은 전 지표 붕괴로, "vdrop은 MP3D에서 전면 기각" 법칙의 극단 사례다. eat+LLRD의 다시드 칸(MP3D 4/8ch)은 지면상 시드 0 행만 실었고 판정은 본문대로 시드 평균을 따른다.</p>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">Replica 2ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.2894</td><td>0.5587</td><td>0.1567</td><td>0.7970</td><td>0.1452</td><td>0.8586</td><td>1.8769</td></tr>
+<tr><td>EchoDiffusion</td><td>0.3585</td><td>0.6661</td><td>0.1947</td><td>0.7322</td><td>0.1938</td><td>1.0090</td><td>2.4845</td></tr>
+<tr><td>eat+LLRD</td><td>0.2762</td><td>0.5408</td><td>0.1538</td><td>0.8067</td><td>0.1412</td><td>0.8066</td><td>1.7198</td></tr>
+<tr><td>sslam</td><td class="w">0.2711</td><td class="w">0.5358</td><td class="w">0.1492</td><td class="w">0.8134</td><td class="w">0.1399</td><td class="w">0.7819</td><td>1.8169</td></tr>
+<tr><td>sslam+LLRD</td><td>0.2805</td><td>0.5484</td><td>0.1534</td><td>0.8055</td><td>0.1434</td><td>0.8373</td><td class="w">1.6525</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">Replica 4ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.2596</td><td>0.5143</td><td class="w">0.1404</td><td>0.8263</td><td class="w">0.1354</td><td>0.7581</td><td>1.5200</td></tr>
+<tr><td>EchoDiffusion</td><td>0.3516</td><td>0.6575</td><td>0.1935</td><td>0.7416</td><td>0.2038</td><td>0.9902</td><td>2.3110</td></tr>
+<tr><td>eat+LLRD</td><td>0.2609</td><td>0.5115</td><td>0.1446</td><td>0.8217</td><td>0.1422</td><td>0.7372</td><td>1.5915</td></tr>
+<tr><td>sslam s0</td><td class="w">0.2553</td><td class="w">0.5019</td><td>0.1422</td><td>0.8262</td><td>0.1422</td><td>0.7152</td><td class="w">1.4461</td></tr>
+<tr><td>sslam s1</td><td>0.2636</td><td>0.5175</td><td>0.1437</td><td>0.8181</td><td>0.1414</td><td>0.7825</td><td>1.5001</td></tr>
+<tr><td>sslam s2</td><td>0.2789</td><td>0.5365</td><td>0.1552</td><td>0.8068</td><td>0.1512</td><td>0.8175</td><td>1.6649</td></tr>
+<tr><td>sslam+LLRD</td><td>0.2575</td><td>0.5102</td><td>0.1435</td><td class="w">0.8265</td><td>0.1430</td><td class="w">0.7016</td><td>1.5537</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">Replica 6ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.2384</td><td>0.4809</td><td>0.1296</td><td>0.8471</td><td class="w">0.1263</td><td>0.6840</td><td>1.5279</td></tr>
+<tr><td>EchoDiffusion</td><td>0.3447</td><td>0.6531</td><td>0.1948</td><td>0.7577</td><td>0.2041</td><td>0.9586</td><td>1.9859</td></tr>
+<tr><td>eat+LLRD</td><td>0.2427</td><td>0.4839</td><td>0.1347</td><td>0.8418</td><td>0.1346</td><td>0.6788</td><td>1.4656</td></tr>
+<tr><td>sslam s0</td><td class="w">0.2271</td><td class="w">0.4630</td><td class="w">0.1269</td><td class="w">0.8540</td><td>0.1269</td><td class="w">0.6153</td><td>1.3453</td></tr>
+<tr><td>sslam s1</td><td>0.2336</td><td>0.4652</td><td>0.1314</td><td>0.8450</td><td>0.1331</td><td>0.6173</td><td class="w">1.3307</td></tr>
+<tr><td>sslam s2</td><td>0.2400</td><td>0.4779</td><td>0.1343</td><td>0.8396</td><td>0.1355</td><td>0.6467</td><td>1.4627</td></tr>
+<tr><td>sslam+LLRD</td><td>0.2385</td><td>0.4765</td><td>0.1316</td><td>0.8438</td><td>0.1347</td><td>0.6581</td><td>1.4093</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">Replica 8ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.2368</td><td>0.4810</td><td class="w">0.1272</td><td class="w">0.8470</td><td class="w">0.1250</td><td>0.6807</td><td>1.5890</td></tr>
+<tr><td>EchoDiffusion</td><td>0.3400</td><td>0.6373</td><td>0.1870</td><td>0.7537</td><td>0.2045</td><td>0.9551</td><td>2.1604</td></tr>
+<tr><td>eat+LLRD vd</td><td>0.2371</td><td class="w">0.4712</td><td>0.1330</td><td>0.8419</td><td>0.1313</td><td class="w">0.6584</td><td>1.4754</td></tr>
+<tr><td>sslam vd</td><td>0.2368</td><td>0.4785</td><td>0.1285</td><td>0.8450</td><td>0.1273</td><td>0.6953</td><td>1.4351</td></tr>
+<tr><td>sslam+LLRD vd</td><td class="w">0.2363</td><td>0.4718</td><td>0.1335</td><td>0.8460</td><td>0.1305</td><td>0.6698</td><td class="w">1.3952</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">MP3D 2ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.9084</td><td>1.3873</td><td>0.5224</td><td>0.4486</td><td>0.4563</td><td>1.2795</td><td>4.4105</td></tr>
+<tr><td>EchoDiffusion</td><td>0.9889</td><td>1.4550</td><td>0.6268</td><td>0.4097</td><td>0.5226</td><td>1.3202</td><td>4.4021</td></tr>
+<tr><td>eat+LLRD</td><td>0.9018</td><td>1.3780</td><td>0.5217</td><td>0.4534</td><td>0.4573</td><td>1.2734</td><td>4.2847</td></tr>
+<tr><td>sslam</td><td class="w">0.8965</td><td class="w">1.3706</td><td class="w">0.5161</td><td class="w">0.4566</td><td>0.4563</td><td class="w">1.2587</td><td class="w">4.2549</td></tr>
+<tr><td>sslam+LLRD</td><td>0.8991</td><td>1.3742</td><td>0.5188</td><td>0.4518</td><td class="w">0.4554</td><td>1.2774</td><td>4.2739</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">MP3D 4ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.7849</td><td>1.2759</td><td class="w">0.3764</td><td>0.5380</td><td class="w">0.3845</td><td>1.1408</td><td>3.9879</td></tr>
+<tr><td>EchoDiffusion</td><td>0.9600</td><td>1.4374</td><td>0.5834</td><td>0.4201</td><td>0.4880</td><td>1.3444</td><td>4.4816</td></tr>
+<tr><td>eat+LLRD s0</td><td>0.7728</td><td>1.2573</td><td>0.3785</td><td class="w">0.5406</td><td>0.3864</td><td>1.1136</td><td class="w">3.7896</td></tr>
+<tr><td>sslam</td><td>0.8335</td><td>1.3153</td><td>0.4272</td><td>0.4759</td><td>0.4030</td><td>1.2424</td><td>4.4171</td></tr>
+<tr><td>sslam+LLRD65</td><td class="w">0.7714</td><td class="w">1.2541</td><td>0.3786</td><td>0.5405</td><td>0.3852</td><td class="w">1.1047</td><td>3.8102</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">MP3D 6ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td class="w">0.7502</td><td class="w">1.2390</td><td class="w">0.3556</td><td class="w">0.5586</td><td class="w">0.3665</td><td class="w">1.1026</td><td class="w">3.9395</td></tr>
+<tr><td>EchoDiffusion</td><td>0.9648</td><td>1.4486</td><td>0.5777</td><td>0.4166</td><td>0.4875</td><td>1.3476</td><td>4.5052</td></tr>
+<tr><td>eat+LLRD</td><td>0.7736</td><td>1.2539</td><td>0.3806</td><td>0.5351</td><td>0.3821</td><td>1.1411</td><td>3.9447</td></tr>
+<tr><td>eat+LLRD+vd</td><td>0.7951</td><td>1.2782</td><td>0.4023</td><td>0.5170</td><td>0.3940</td><td>1.1593</td><td>3.9707</td></tr>
+</table></div>
+<div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">MP3D 8ch</caption>
+<tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>
+<tr><td>OAA-CNN</td><td>0.7467</td><td>1.2248</td><td class="w">0.3463</td><td>0.5528</td><td class="w">0.3646</td><td>1.1083</td><td>3.7949</td></tr>
+<tr><td>EchoDiffusion</td><td>1.0029</td><td>1.4601</td><td>0.6807</td><td>0.4042</td><td>0.5456</td><td>1.3278</td><td>4.3447</td></tr>
+<tr><td>eat+LLRD novd s0</td><td class="w">0.7306</td><td class="w">1.2169</td><td>0.3556</td><td class="w">0.5786</td><td>0.3685</td><td class="w">1.0608</td><td class="w">3.6447</td></tr>
+<tr><td>eat+LLRD vd</td><td>0.9858</td><td>1.4554</td><td>0.6419</td><td>0.4070</td><td>0.5071</td><td>1.3664</td><td>4.4630</td></tr>
+</table></div>
+<!--/APPENDIX_A-->
 <p class="sub">재현: <code>python 0820_reverb_ablation.py {v1|sweep|notch|renorm|seeds|shuffle|timing_amp|blocksweep|cross2x2|seedmech}</code> · 원자료 <code>0820_report/data/</code> · 그림 <code>0820_report/figs/</code> · 전체 수치 <code>0820_RESULTS.md</code></p>
 </main>
