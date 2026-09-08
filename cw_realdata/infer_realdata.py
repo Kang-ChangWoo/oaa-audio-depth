@@ -48,6 +48,7 @@ ap.add_argument("--tag", default="", help="output filename suffix (e.g. _mp3d)")
 ap.add_argument("--audio-dir", default="", help="dir (under cw_realdata) with mono_{deg}deg_clip_1s.wav")
 ap.add_argument("--scene", default="room", help="scene under data/ (room|corner|hall): sets audio-dir=data/<scene>/clipped_audio, out-dir=results/<scene>")
 ap.add_argument("--out-dir", default="", help="output dir (under cw_realdata; default cw_realdata itself)")
+ap.add_argument("--highpass", type=float, default=0.0, help="if >0, 4th-order Butterworth high-pass at this Hz (removes real-recording LF wobble absent in sim)")
 ap.add_argument("--match-tdr", type=float, default=0.0, help="if >0, rescale the tail (after direct) so tail/direct energy ratio equals this target (sim mean ~1.1) — sim-to-real amplitude correction experiment")
 ARGS = ap.parse_args()
 if not ARGS.audio_dir:
@@ -60,7 +61,7 @@ os.environ.setdefault("MP3D_ROOT", "/root/local1/changwoo/matterport3d_0303renew
 os.environ.setdefault("R0422_SPLIT", "off3")
 os.environ["DATA_MODULE"] = ARGS.data_module
 
-from scipy.signal import resample_poly
+from scipy.signal import resample_poly, butter, sosfiltfilt
 from core.data import get_data_module
 from core.ckpt import build
 
@@ -97,6 +98,9 @@ def find_direct(x48):
 
 def to_training_window(x44, WINDOW):
     x48 = resample_poly(x44, 160, 147).astype(np.float32)          # 44.1k -> 48k
+    if ARGS.highpass > 0:
+        sos = butter(4, ARGS.highpass, "highpass", fs=48000, output="sos")
+        x48 = sosfiltfilt(sos, x48).astype(np.float32)
     pk = find_direct(x48)
     lead = DIRECT_AT
     start = pk - lead
