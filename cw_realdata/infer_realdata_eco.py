@@ -58,8 +58,8 @@ with torch.no_grad():
     pred_m = (model(spec[:,idx].to(dev), wav8[idx][:wch].unsqueeze(0).to(dev)).float()*md).squeeze().cpu().numpy()
 
 OUT = os.path.join(HERE, ARGS.out_dir); os.makedirs(OUT, exist_ok=True)
-np.save(os.path.join(OUT, f"pred_depth_{ARGS.tag}.npy"), pred)
-np.save(os.path.join(OUT, f"pred_depth_mirror_{ARGS.tag}.npy"), pred_m)
+np.save(os.path.join(OUT, f"pred_{ARGS.tag}.npy"), pred)
+np.save(os.path.join(OUT, f"pred_mirror_{ARGS.tag}.npy"), pred_m)
 print(ARGS.tag, "pred", pred.shape, "range %.2f..%.2f mean %.2f"%(pred.min(),pred.max(),pred.mean()))
 
 try:
@@ -69,5 +69,5 @@ except ImportError:
 fig,axes=plt.subplots(1,2,figsize=(13,3.6))
 for ax,d,t in [(axes[0],pred,"canonical"),(axes[1],pred_m,"mirrored")]:
     im=ax.imshow(d,cmap="turbo",vmin=0,vmax=md,aspect="auto"); ax.set_title(f"{ARGS.tag} — {t}"); fig.colorbar(im,ax=ax,shrink=.85)
-fig.tight_layout(); fig.savefig(os.path.join(OUT, f"pred_depth_{ARGS.tag}.png"), dpi=110)
-print("saved", os.path.join(OUT, f"pred_depth_{ARGS.tag}.png"))
+fig.tight_layout(); fig.savefig(os.path.join(OUT, f"pred_{ARGS.tag}.png"), dpi=110)
+print("saved", os.path.join(OUT, f"pred_{ARGS.tag}.png"))

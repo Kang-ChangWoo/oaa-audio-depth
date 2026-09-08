@@ -1,0 +1,23 @@
+{
+  "left_rms": 0.010028213262557983,
+  "right_rms": 0.016703903675079346,
+  "left_peak": 0.3719055652618408,
+  "right_peak": 0.43078601360321045,
+  "rms_ratio_lr": 0.6003511187632109,
+  "peak_ratio_lr": 0.8633185500103332,
+  "left_gain_to_match_right": 1.6656892490064625,
+  "right_gain_to_match_left": 0.6003511187632109,
+  "balance_tolerance": 0.05,
+  "balanced": false,
+  "metadata": {
+    "created_at": "2026-09-08T22:33:51",
+    "audio_path": "/home/rvi/projects/hear_to_act/audio_calibration_result/stereo_calibration.wav",
+    "duration_sec": 3.0,
+    "samplerate": 44100,
+    "channels": 2,
+    "dtype": "float32",
+    "input_device": 0,
+    "input_device_name": "UMC404HD 192k: USB Audio (hw:1,0)",
+    "requested_samplerate": null
+  }
+}

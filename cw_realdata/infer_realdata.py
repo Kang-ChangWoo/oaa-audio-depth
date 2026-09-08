@@ -45,9 +45,14 @@ ap.add_argument("--run", default="0820_sslam_llrd_r8vd_rep",
                 help="checkpoint dir under comparison_0820 (e.g. 0820_eatllrd_r8novd_mp3d)")
 ap.add_argument("--data-module", default="data_0422", help="data_0422 (Replica) or data_mp3d")
 ap.add_argument("--tag", default="", help="output filename suffix (e.g. _mp3d)")
-ap.add_argument("--audio-dir", default="clipped_audio", help="dir (under cw_realdata) with mono_{deg}deg_clip_1s.wav")
+ap.add_argument("--audio-dir", default="", help="dir (under cw_realdata) with mono_{deg}deg_clip_1s.wav")
+ap.add_argument("--scene", default="room", help="scene under data/ (room|corner|hall): sets audio-dir=data/<scene>/clipped_audio, out-dir=results/<scene>")
 ap.add_argument("--out-dir", default="", help="output dir (under cw_realdata; default cw_realdata itself)")
+ap.add_argument("--match-tdr", type=float, default=0.0, help="if >0, rescale the tail (after direct) so tail/direct energy ratio equals this target (sim mean ~1.1) — sim-to-real amplitude correction experiment")
 ARGS = ap.parse_args()
+if not ARGS.audio_dir:
+    ARGS.audio_dir = os.path.join("data", ARGS.scene, "clipped_audio")
+    if not ARGS.out_dir: ARGS.out_dir = os.path.join("results", ARGS.scene)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 os.environ.setdefault("REPLICA_ROOT", "/root/local2/replica_0422_lite")
@@ -74,14 +79,25 @@ CH2MIC = {  # (yaw_slot, ear) -> real mic file azimuth ("360" = 0 deg)
 }
 
 def load_mono(deg):
-    w = wave.open(os.path.join(HERE, ARGS.audio_dir, f"mono_{deg}deg_clip_1s.wav"))
+    fp = os.path.join(HERE, ARGS.audio_dir, f"mono_{deg}deg_clip_1s.wav")
+    if not os.path.exists(fp) and deg == 225:                       # hall scene names this mic 215deg
+        fp = os.path.join(HERE, ARGS.audio_dir, "mono_215deg_clip_1s.wav")
+    w = wave.open(fp)
     assert w.getframerate() == 44100 and w.getnchannels() == 1 and w.getsampwidth() == 2
     x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
     return x
 
+def find_direct(x48):
+    """Direct-arrival index: global argmax is WRONG in halls where a late reflection can
+    exceed the direct (observed: hall/215deg peak at 25 ms vs true onset 3.6 ms). Use the
+    first crossing of 50% of the global max, then the local peak within the next 1 ms."""
+    a = np.abs(x48)
+    onset = int(np.argmax(a > 0.5 * a.max()))
+    return onset + int(np.argmax(a[onset:onset + 48]))
+
 def to_training_window(x44, WINDOW):
     x48 = resample_poly(x44, 160, 147).astype(np.float32)          # 44.1k -> 48k
-    pk = int(np.argmax(np.abs(x48)))                                # assume strongest peak = direct
+    pk = find_direct(x48)
     lead = DIRECT_AT
     start = pk - lead
     if start < 0:
@@ -100,7 +116,13 @@ def main():
     for o in (0, 1, 2, 3):                                          # per yaw-pair norm to peak 1.0
         pk = max(np.abs(chans[(o, "L")]).max(), np.abs(chans[(o, "R")]).max())
         chans[(o, "L")] /= pk; chans[(o, "R")] /= pk
-    wav8 = torch.from_numpy(np.stack([chans[ch] for ch in order]))  # (8, 2799)
+    if ARGS.match_tdr > 0:                                          # tame the real recordings' ~9x tail/direct energy excess
+        for ch in order:
+            x = chans[ch]; d1 = DIRECT_AT + 48
+            ed = float((x[:d1] ** 2).sum()); et = float((x[d1:] ** 2).sum())
+            if ed > 0 and et > 0:
+                x[d1:] *= np.sqrt(ARGS.match_tdr / (et / ed))
+    wav8 = torch.from_numpy(np.stack([chans[ch] for ch in order]))  # (8, WINDOW)
     spec = stft(wav8).unsqueeze(0)                                  # (1, 8, 256, 512)
 
     # ---- model
@@ -121,8 +143,8 @@ def main():
 
     OUT = os.path.join(HERE, ARGS.out_dir) if ARGS.out_dir else HERE
     os.makedirs(OUT, exist_ok=True)
-    np.save(os.path.join(OUT, "pred_depth%s.npy" % ARGS.tag), pred)
-    np.save(os.path.join(OUT, "pred_depth_mirror%s.npy" % ARGS.tag), pred_m)
+    np.save(os.path.join(OUT, "pred%s.npy" % ARGS.tag), pred)
+    np.save(os.path.join(OUT, "pred_mirror%s.npy" % ARGS.tag), pred_m)
     print("pred shape", pred.shape, "range %.2f..%.2f m mean %.2f" % (pred.min(), pred.max(), pred.mean()))
     print("mirror     range %.2f..%.2f m mean %.2f" % (pred_m.min(), pred_m.max(), pred_m.mean()))
 
@@ -149,8 +171,8 @@ def main():
     ax.set_yticks(range(8)); ax.set_yticklabels([f"y{o*90} {e} (mic{CH2MIC[(o,e)]})" for o, e in order], fontsize=7)
     ax.set_xlabel("time (ms)"); ax.set_title("model inputs after alignment/normalisation")
     fig.suptitle(f"cw_realdata → {ARGS.run} · panorama defined up to 45° rotation + mirror")
-    fig.tight_layout(); fig.savefig(os.path.join(OUT, "pred_depth%s.png" % ARGS.tag), dpi=110)
-    print("saved", os.path.join(OUT, "pred_depth%s.png" % ARGS.tag))
+    fig.tight_layout(); fig.savefig(os.path.join(OUT, "pred%s.png" % ARGS.tag), dpi=110)
+    print("saved", os.path.join(OUT, "pred%s.png" % ARGS.tag))
 
 if __name__ == "__main__":
     main()
