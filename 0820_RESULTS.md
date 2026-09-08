@@ -344,3 +344,8 @@ CNN 0.2596. TIE under the <0.01 rule, leaning CNN; the early single-seed "sslam 
 formally retired. sslam fb seed spread (0.012) is the largest measured. Final Replica column
 (sslam family): r2 WIN / fb TIE / r6 WIN (3 seeds) / r8 exact TIE — never loses, clear wins at
 r2 and r6.
+
+**Unified-setting Replica column CLOSED**: sslam_llrd_r8vd_rep test 0.2363 — best r8 of the
+campaign (RMSE 0.4718 / mid 0.6698 / far 1.3952 all beat the CNN; MAE gap 0.0005 = tie by rule).
+The LLRD-on-Replica cost seen at r2/r6 (+0.005..0.009) vanishes at r8. Unified sslam+LLRD now:
+Rep r2/fb/r6/r8 all ties (never loses), MP3D r2/fb wins, r6/r8 training.
