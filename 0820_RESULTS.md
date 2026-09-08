@@ -199,7 +199,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 |----|------------------|-------||-----|------------|-----------------------------|
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
 | 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7714(llrd65) WIN       |
-| 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | (t)                         |
+| 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | 0.7848 LOSS                 |
 | 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | (t)            |
 
 EchoDiffusion                     eat+LLRD+convstem
@@ -373,3 +373,11 @@ cell, below sslam 0.8965. Full metrics: RMSE 1.3708, d1 0.4666 (cell best), near
 0.4563 — the "convstem is a net gain on rough MP3D, zero-sum only on clean Replica" law reproduces
 at 2ch), mid 1.2577, far 4.2623. MP3D column now: AFM strict wins at r2 (two families) and fb
 (three runs); CNN holds r6 only. Freed GPU took 0820_beyond_r2_rep (ITD queue #3).
+
+### 2026-09-09: sslam_llrd_r6_mp3d lands — MP3D r6 stays with the CNN (strict LOSS)
+Unified-setting test 0.7848 vs CNN 0.7502 (gap 0.0346 > 0.01). Second AFM family to lose this
+cell (eat+LLRD 0.7736). Band structure is the usual trade: far better (3.803 vs 3.940) but
+near (0.400 vs 0.367) / mid (1.113 vs 1.103) / d1 (0.533 vs 0.559) all worse — with six clean
+observations on messy MP3D the near/mid precision loss dominates. Verdict split: plain sslam
+still unbeaten on its 5 completed cells; unified sslam+LLRD is now 1 win / 5 tie / 1 LOSS with
+MP3D r8 pending. The "one setting never loses anywhere" goal fails at MP3D r6.

@@ -17,7 +17,7 @@ CELLS=[
  ('Replica 8ch',rep,[('OAA-CNN','oaa_r8_fin'),('EchoScan','es_r8_fin'),('EchoDiffusion','eco_r8_fin'),('eat+LLRD vd','0820_eatllrd_r8_rep'),('sslam vd','0820_sslam_r8vd_rep'),('sslam+LLRD vd','0820_sslam_llrd_r8vd_rep')]),
  ('MP3D 2ch',mp,[('OAA-CNN','oaa_r2_fin'),('EchoScan','es_r2_fin'),('EchoDiffusion','eco_r2_fin'),('eat+LLRD','0820_eatllrd_r2_mp3d'),('eat+LLRD+cs','0820_eatllrd_cs_r2_mp3d'),('sslam','0820_sslam_r2_mp3d'),('sslam+LLRD','0820_sslam_llrd_r2_mp3d')]),
  ('MP3D 4ch',mp,[('OAA-CNN','oaa_fb_fin'),('EchoScan','es_fb_fin'),('EchoDiffusion','eco_fb_wstd'),('eat+LLRD s0','0820_eat_llrd_fb_mp3d'),('sslam','0820_sslam_fb_mp3d'),('sslam+LLRD65','0820_sslam_llrd65_fb_mp3d')]),
- ('MP3D 6ch',mp,[('OAA-CNN','oaa_r6_fin'),('EchoScan','es_r6_fin'),('EchoDiffusion','eco_r6_fin'),('eat+LLRD','0820_eatllrd_r6_mp3d'),('eat+LLRD+vd','0820_eatllrd_r6vd_mp3d')]),
+ ('MP3D 6ch',mp,[('OAA-CNN','oaa_r6_fin'),('EchoScan','es_r6_fin'),('EchoDiffusion','eco_r6_fin'),('eat+LLRD','0820_eatllrd_r6_mp3d'),('eat+LLRD+vd','0820_eatllrd_r6vd_mp3d'),('sslam+LLRD','0820_sslam_llrd_r6_mp3d')]),
  ('MP3D 8ch',mp,[('OAA-CNN','oaa_r8_fin'),('EchoScan','es_r8_fin'),('EchoDiffusion','eco_r8_fin'),('eat+LLRD novd s0','0820_eatllrd_r8novd_mp3d'),('eat+LLRD vd','0820_eatllrd_r8_mp3d')]),
 ]
 rows=[]
