@@ -55,7 +55,7 @@ dl div{margin:4px 0}
 </dl>
 
 <h2>3. 결과 I — 판정 매트릭스와 그 내부 구조</h2>
-<p>여덟 개의 평가 칸(채널 4 × 데이터셋 2)에 판정 규칙을 기계적으로 적용한 결과가 아래 표다. 가족별 스코어카드로 먼저 요약한다. <b>기본 sslam: 2승 3동률 0패</b>(3칸 학습 중) — Replica 2ch(0.2711, Δ0.0183)와 MP3D 2ch(0.8965, Δ0.0119)에서 규칙상으로 이기고, 완주한 어떤 칸에서도 지지 않는다. <b>통일세팅 sslam+LLRD: 1승 5동률 0패</b>(2칸 학습 중) — 명확한 승은 MP3D 4ch(0.7714, Δ0.0135) 하나이고 Replica 네 칸은 전부 동률이다(그중 8ch은 0.2363으로 캠페인 최고). <b>eat+LLRD: 2승 5동률 1패</b> — Replica 2ch와 MP3D 4ch에서 이기지만, MP3D 6ch(0.7736, Δ−0.0234)는 캠페인 유일의 규칙상 패다. <b>EchoDiffusion: 0승</b> — 완주 8칸 전부에서 열세이고 다수가 규칙상 패다. 요컨대 정확한 문장은 "AFM이 다 이긴다"가 아니라 <b>"sslam 계열은 지지 않으면서, 규칙상 명확한 승은 관측이 가장 희소한 2ch 두 칸과 어려운 데이터의 4ch(MP3D)에 몰려 있다"</b>이다.</p>
+<p>여덟 개의 평가 칸(채널 4 × 데이터셋 2)에 판정 규칙을 기계적으로 적용한 결과가 아래 표다. 가족별 스코어카드로 먼저 요약한다. <b>기본 sslam: 2승 3동률 0패</b>(3칸 학습 중) — Replica 2ch(0.2711, Δ0.0183)와 MP3D 2ch(0.8965, Δ0.0119)에서 규칙상으로 이기고, 완주한 어떤 칸에서도 지지 않는다. <b>통일세팅 sslam+LLRD: 1승 5동률 0패</b>(2칸 학습 중) — 명확한 승은 MP3D 4ch(0.7714, Δ0.0135) 하나이고 Replica 네 칸은 전부 동률이다(그중 8ch은 0.2363으로 캠페인 최고). <b>eat+LLRD: 2승 5동률 1패</b> — Replica 2ch와 MP3D 4ch에서 이기지만, MP3D 6ch(0.7736, Δ−0.0234)는 캠페인 유일의 규칙상 패다. 여기에 conv stem을 더한 변형(eat+LLRD+cs)은 MP3D에서 두 칸의 신기록을 추가로 세운다 — 4ch 0.7617(Δ0.0232)과 2ch 0.8884(Δ0.0200), 둘 다 규칙상 승. <b>EchoDiffusion: 0승</b> — 완주 8칸 전부에서 열세이고 다수가 규칙상 패다. 요컨대 정확한 문장은 "AFM이 다 이긴다"가 아니라 <b>"sslam 계열은 지지 않으면서, 규칙상 명확한 승은 관측이 가장 희소한 2ch 두 칸과 어려운 데이터의 4ch(MP3D)에 몰려 있다"</b>이다.</p>
 <div class="tw"><table>
 <tr><th>test MAE (m)</th><th>Rep 2ch</th><th>Rep 4ch</th><th>Rep 6ch</th><th>Rep 8ch</th><th>MP3D 2ch</th><th>MP3D 4ch</th><th>MP3D 6ch</th><th>MP3D 8ch</th></tr>
 <tr><td>OAA-CNN (논문)</td><td>0.2894</td><td>0.2596</td><td>0.2384</td><td>0.2368</td><td>0.9084</td><td>0.7849</td><td class="w">0.7502</td><td>0.7467</td></tr>
@@ -87,7 +87,7 @@ dl div{margin:4px 0}
 <p><b>모든 AFM은 처음에 전패했다.</b> 다섯 백본을 동일한 표준 레시피(사전학습부 학습률 0.1배 균일)로 미세조정하자 여덟 칸 어디서도 CNN을 이기지 못했다(그림 6). 특히 MP3D에서 EAT/SSLAM 계열은 학습 중반에 val이 튀며 무너졌는데, 이는 post-norm 구조에서 학습률이 정점일 때 사전학습 특징이 파괴되는 현상이었다. 층별 학습률 감쇠(LLRD)가 이것을 고쳤고 — eat의 MP3D val이 1.009에서 0.891로 내려와 처음으로 CNN을 넘었다 — 이 발견은 캠페인 전체에서 <b>유일하게 부작용 없는 개입</b>으로 남았다. 그림 8은 이 지점을 스펙트럼으로 보여준다: 부주의한 균일 미세조정은 스크래치보다 나쁘고, EchoDiffusion처럼 동결하면 안전하지만 적응이 없으며, LLRD는 "아래층은 사실상 동결, 위층만 적응"이라는 중간 지점으로서 유일하게 기준선을 넘는다.</p>
 <figure><img src="figs/fig6_screening_llrd.png" alt="screening"><figcaption><b>그림 6.</b> 스크리닝(val): 동일 레시피에서 전패. 화살표는 LLRD 적용 효과.</figcaption></figure>
 <figure><img src="figs/fig8_ft_policy.png" alt="ft policy"><figcaption><b>그림 8.</b> 사전학습을 다루는 방식의 스펙트럼(MP3D 4ch test).</figcaption></figure>
-<p><b>정규화와 구조 개입은 조건부이거나 제로섬이었다.</b> 마이크 드롭(vdrop)은 관측 중복이 충분하고(8ch) 신호가 깨끗한(Replica) 조합에서만 이득이며, 4·6ch에서는 각 시드 3개로 해로움이, MP3D에서는 전 채널에서 해로움이 확인됐다(그림 7) — AFM이 읽는 잔향-통합 입력을 지우는 조작이기 때문이라는 해석과 부합하고, 논문 CNN이 8ch에서만 vdrop을 채택했던 경계와도 일치한다. 근거리 약점을 겨냥한 개입들 — conv 패치 stem, 근거리를 업웨이트하는 AbsRel 손실(강·약 두 용량) — 은 Replica에서 일관되게 근거리를 고치는 만큼 중·원거리를 망치는 자리바꿈에 그쳤다(그림 9). 프론티어 자체를 바깥으로 민 것은 개입이 아니라 백본 교체(SSLAM)뿐이었다는 사실이, "재배분이 아니라 표현이 성능의 한계를 정한다"는 이 캠페인의 중심 교훈이다. 흥미롭게도 같은 conv stem이 거친 MP3D에서는 근·중거리를 동시에 개선하며 4ch 신기록(0.7617)을 세웠다 — 제로섬 법칙조차 데이터셋의 병목(정밀도 제한 vs 강건성 제한)에 종속된 조건부 법칙이었다.</p>
+<p><b>정규화와 구조 개입은 조건부이거나 제로섬이었다.</b> 마이크 드롭(vdrop)은 관측 중복이 충분하고(8ch) 신호가 깨끗한(Replica) 조합에서만 이득이며, 4·6ch에서는 각 시드 3개로 해로움이, MP3D에서는 전 채널에서 해로움이 확인됐다(그림 7) — AFM이 읽는 잔향-통합 입력을 지우는 조작이기 때문이라는 해석과 부합하고, 논문 CNN이 8ch에서만 vdrop을 채택했던 경계와도 일치한다. 근거리 약점을 겨냥한 개입들 — conv 패치 stem, 근거리를 업웨이트하는 AbsRel 손실(강·약 두 용량) — 은 Replica에서 일관되게 근거리를 고치는 만큼 중·원거리를 망치는 자리바꿈에 그쳤다(그림 9). 프론티어 자체를 바깥으로 민 것은 개입이 아니라 백본 교체(SSLAM)뿐이었다는 사실이, "재배분이 아니라 표현이 성능의 한계를 정한다"는 이 캠페인의 중심 교훈이다. 흥미롭게도 같은 conv stem이 거친 MP3D에서는 근·중거리를 동시에 개선하며 4ch(0.7617)과 2ch(0.8884, 근거리까지 CNN보다 낮음)의 두 신기록을 세웠다 — 제로섬 법칙조차 데이터셋의 병목(정밀도 제한 vs 강건성 제한)에 종속된 조건부 법칙이었다.</p>
 <figure><img src="figs/fig7_vdrop.png" alt="vdrop"><figcaption><b>그림 7.</b> vdrop 판정(점=시드). Replica 8ch에서만 이득.</figcaption></figure>
 <figure><img src="figs/fig9_zerosum.png" alt="zero-sum"><figcaption><b>그림 9.</b> Replica 4ch의 근거리(x)–중거리(y) 평면. eat에 가한 개입들(빨강)은 대각선 위에서 자리만 바꾸고, sslam(초록)만 프론티어 바깥에 있다.</figcaption></figure>
 <p><b>비교 모델의 실패도 같은 원리로 설명된다.</b> 디퓨전 기반 EchoDiffusion은 원거리에서 그럴듯한 구조를 채우는 데는 강하지만 8ch에서 6ch보다 오히려 나빠지는 비단조 스케일링을 보인다. 코드 수준에서 원인을 확인했는데, 채널들을 마이크 위치 정보 없이 평균·스택으로만 합치기 때문에 어느 방향의 관측인지 모델이 알 수 없어 6ch에서 정보가 포화된다. 같은 마이크 드롭이 위치-인지 구조(OAA)에는 이득, 위치-맹목 구조(eco)에는 손해였다는 대비가 이 진단의 증거다.</p>
@@ -167,8 +167,9 @@ dl div{margin:4px 0}
 <tr><td>OAA-CNN</td><td>0.9084</td><td>1.3873</td><td>0.5224</td><td>0.4486</td><td>0.4563</td><td>1.2795</td><td>4.4105</td></tr>
 <tr><td>EchoDiffusion</td><td>0.9889</td><td>1.4550</td><td>0.6268</td><td>0.4097</td><td>0.5226</td><td>1.3202</td><td>4.4021</td></tr>
 <tr><td>eat+LLRD</td><td>0.9018</td><td>1.3780</td><td>0.5217</td><td>0.4534</td><td>0.4573</td><td>1.2734</td><td>4.2847</td></tr>
-<tr><td>sslam</td><td class="w">0.8965</td><td class="w">1.3706</td><td class="w">0.5161</td><td class="w">0.4566</td><td>0.4563</td><td class="w">1.2587</td><td class="w">4.2549</td></tr>
-<tr><td>sslam+LLRD</td><td>0.8991</td><td>1.3742</td><td>0.5188</td><td>0.4518</td><td class="w">0.4554</td><td>1.2774</td><td>4.2739</td></tr>
+<tr><td>eat+LLRD+cs</td><td class="w">0.8884</td><td>1.3708</td><td class="w">0.5030</td><td class="w">0.4666</td><td class="w">0.4494</td><td class="w">1.2577</td><td>4.2623</td></tr>
+<tr><td>sslam</td><td>0.8965</td><td class="w">1.3706</td><td>0.5161</td><td>0.4566</td><td>0.4563</td><td>1.2587</td><td class="w">4.2549</td></tr>
+<tr><td>sslam+LLRD</td><td>0.8991</td><td>1.3742</td><td>0.5188</td><td>0.4518</td><td>0.4554</td><td>1.2774</td><td>4.2739</td></tr>
 </table></div>
 <div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">MP3D 4ch</caption>
 <tr><th>model</th><th>MAE</th><th>RMSE</th><th>AbsRel</th><th>δ1</th><th>근<3m</th><th>중3–6m</th><th>원>6m</th></tr>

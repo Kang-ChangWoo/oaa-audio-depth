@@ -205,7 +205,8 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
-| 2  | 0.2854  | 0.9007 tie(+) | | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
+| 2  | 0.2854  | 0.9007 tie(+) | | 2  | (t)         | 0.8884 WIN (r2 record) |
+| 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
 | 8  | 0.2600  | 0.7572     |
@@ -365,3 +366,10 @@ that survive: sslam Rep r2 (.0183), sslam MP3D r2 (.0119), eat Rep r2 (.0132), e
 (.0132/.0135), cs MP3D fb (.0232). eat MP3D r6 is a strict LOSS (.0234). Honest headline:
 sslam family never loses a completed cell; strict wins concentrate at sparse-channel (r2) and
 hard-data (MP3D fb) cells. Report §3/§8 and the matrix updated to match.
+
+### 2026-09-08 (2): cs_r2_mp3d lands — convstem takes the MP3D 2ch record
+eat+LLRD+convstem MP3D r2 test 0.8884 vs CNN 0.9084 (gap 0.0200, strict WIN) — new best for the
+cell, below sslam 0.8965. Full metrics: RMSE 1.3708, d1 0.4666 (cell best), near 0.4494 (beats CNN
+0.4563 — the "convstem is a net gain on rough MP3D, zero-sum only on clean Replica" law reproduces
+at 2ch), mid 1.2577, far 4.2623. MP3D column now: AFM strict wins at r2 (two families) and fb
+(three runs); CNN holds r6 only. Freed GPU took 0820_beyond_r2_rep (ITD queue #3).
