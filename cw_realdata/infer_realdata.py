@@ -36,21 +36,29 @@ Run from the repo root:
   REPLICA_ROOT=/root/local2/replica_0422_lite R0422_SPLIT=off3 DATA_MODULE=data_0422 \
   CUDA_VISIBLE_DEVICES=<gpu> python3 cw_realdata/infer_realdata.py
 """
-import os, sys, glob, wave
+import os, sys, glob, wave, argparse
 import numpy as np
 import torch
 
+ap = argparse.ArgumentParser()
+ap.add_argument("--run", default="0820_sslam_llrd_r8vd_rep",
+                help="checkpoint dir under comparison_0820 (e.g. 0820_eatllrd_r8novd_mp3d)")
+ap.add_argument("--data-module", default="data_0422", help="data_0422 (Replica) or data_mp3d")
+ap.add_argument("--tag", default="", help="output filename suffix (e.g. _mp3d)")
+ARGS = ap.parse_args()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root
 os.environ.setdefault("REPLICA_ROOT", "/root/local2/replica_0422_lite")
+os.environ.setdefault("MP3D_ROOT", "/root/local1/changwoo/matterport3d_0303renew")
 os.environ.setdefault("R0422_SPLIT", "off3")
-os.environ.setdefault("DATA_MODULE", "data_0422")
+os.environ["DATA_MODULE"] = ARGS.data_module
 
 from scipy.signal import resample_poly
 from core.data import get_data_module
 from core.ckpt import build
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RUN = os.path.join(os.path.dirname(HERE), "comparison_0820", "0820_sslam_llrd_r8vd_rep")
+RUN = os.path.join(os.path.dirname(HERE), "comparison_0820", ARGS.run)
 DIRECT_AT = 49          # training direct-spike sample index @48k
 
 # channel order = data_0422 r8; nominal ear azimuth assuming L = yaw+90, R = yaw-90
@@ -68,25 +76,24 @@ def load_mono(deg):
     x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
     return x
 
-def to_training_window(x44):
+def to_training_window(x44, WINDOW):
     x48 = resample_poly(x44, 160, 147).astype(np.float32)          # 44.1k -> 48k
     pk = int(np.argmax(np.abs(x48)))                                # assume strongest peak = direct
     lead = DIRECT_AT
     start = pk - lead
     if start < 0:
         x48 = np.concatenate([np.zeros(-start, np.float32), x48]); start = 0
-    seg = x48[start:start + 2799]
-    if len(seg) < 2799:
-        seg = np.pad(seg, (0, 2799 - len(seg)))
+    seg = x48[start:start + WINDOW]
+    if len(seg) < WINDOW:
+        seg = np.pad(seg, (0, WINDOW - len(seg)))
     return seg
 
 def main():
     DM = get_data_module()
-    WINDOW, stft = DM.WINDOW, DM._stft_mag
-    assert WINDOW == 2799
+    WINDOW, stft = DM.WINDOW, DM._stft_mag   # 2799 (Replica) or 2823 (MP3D legacy cut)
     # ---- assemble 8 channels in r8 order, per-pair peak normalisation (training contract)
     order = [(o, e) for o in (0, 1, 2, 3) for e in ("L", "R")]
-    chans = {ch: to_training_window(load_mono(CH2MIC[ch])) for ch in order}
+    chans = {ch: to_training_window(load_mono(CH2MIC[ch]), WINDOW) for ch in order}
     for o in (0, 1, 2, 3):                                          # per yaw-pair norm to peak 1.0
         pk = max(np.abs(chans[(o, "L")]).max(), np.abs(chans[(o, "R")]).max())
         chans[(o, "L")] /= pk; chans[(o, "R")] /= pk
@@ -107,8 +114,8 @@ def main():
         idx = [1, 0, 3, 2, 5, 4, 7, 6]
         pred_m = (model(spec[:, idx].to(dev), view_poses=poses).float() * max_depth).squeeze().cpu().numpy()
 
-    np.save(os.path.join(HERE, "pred_depth.npy"), pred)
-    np.save(os.path.join(HERE, "pred_depth_mirror.npy"), pred_m)
+    np.save(os.path.join(HERE, "pred_depth%s.npy" % ARGS.tag), pred)
+    np.save(os.path.join(HERE, "pred_depth_mirror%s.npy" % ARGS.tag), pred_m)
     print("pred shape", pred.shape, "range %.2f..%.2f m mean %.2f" % (pred.min(), pred.max(), pred.mean()))
     print("mirror     range %.2f..%.2f m mean %.2f" % (pred_m.min(), pred_m.max(), pred_m.mean()))
 
@@ -129,14 +136,14 @@ def main():
     ax.set_xlabel("azimuth (deg, model frame)"); ax.set_ylabel("horizon depth (m)"); ax.legend(); ax.grid(alpha=.3)
     ax.set_title("horizon profile (middle 5 rows)")
     ax = fig.add_subplot(2, 2, 4)
-    t = np.arange(2799) / 48000 * 1000
+    t = np.arange(wav8.shape[1]) / 48000 * 1000
     for k, ch in enumerate(order):
         ax.plot(t, wav8[k].numpy() * 0.8 + k, lw=.4)
     ax.set_yticks(range(8)); ax.set_yticklabels([f"y{o*90} {e} (mic{CH2MIC[(o,e)]})" for o, e in order], fontsize=7)
     ax.set_xlabel("time (ms)"); ax.set_title("model inputs after alignment/normalisation")
-    fig.suptitle("cw_realdata → 0820_sslam_llrd_r8vd_rep (campaign-best 8ch) · panorama defined up to 45° rotation + mirror")
-    fig.tight_layout(); fig.savefig(os.path.join(HERE, "pred_depth.png"), dpi=110)
-    print("saved", os.path.join(HERE, "pred_depth.png"))
+    fig.suptitle(f"cw_realdata → {ARGS.run} · panorama defined up to 45° rotation + mirror")
+    fig.tight_layout(); fig.savefig(os.path.join(HERE, "pred_depth%s.png" % ARGS.tag), dpi=110)
+    print("saved", os.path.join(HERE, "pred_depth%s.png" % ARGS.tag))
 
 if __name__ == "__main__":
     main()

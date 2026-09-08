@@ -25,3 +25,13 @@ Replica test 0.2363)로 추론. 스크립트 docstring에 전 가정 명시.
 ```
 CUDA_VISIBLE_DEVICES=<gpu> python3 cw_realdata/infer_realdata.py
 ```
+
+## MP3D 모델 추론 추가 (같은 날)
+`--run 0820_eatllrd_r8novd_mp3d --data-module data_mp3d --tag _mp3d`
+(MP3D 8ch 최고 시드, test 0.7306; WINDOW 2823 자동 적용)
+- `pred_depth_mp3d.npy/.png`, `pred_depth_mirror_mp3d.npy`
+- 예측 0.29-3.96m, 평균 1.65m. 근접면(0.3-0.5m)이 0-130도로 더 넓고, 최원방 3.9m@~255도,
+  마주보는 축 스팬 3.1-4.1m.
+- 두 모델의 수평선 프로파일 상관 r=0.53(회전/미러 보정 최적 r=0.57) — "가까운 면 하나 +
+  2.5-4m 벽 + 한 방향 개방부"라는 방 구조 자체는 합의, 개방부의 방위는 서로 다르게 판정
+  (Replica판 ~102도 vs MP3D판 ~255도; 도메인 갭 하 제로샷의 한계로 방위 배치는 참고 수준).
