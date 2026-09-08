@@ -183,7 +183,7 @@ much reverb structure they preserve.
 
 ## Per-method channel x dataset matrices (test MAE; rows=channels, cols=dataset; blank=not run)
 
-Multi-seed cells are mean±std; "(t)" = training as of 2026-09-07. WIN = beats the paper CNN cell.
+Multi-seed cells are mean±std; "(t)" = training as of 2026-09-08. WIN = beats the paper CNN cell.
 
 OAA-CNN (paper baseline)          eat + LLRD
 | ch | Replica | MP3D   |        | ch | Replica      | MP3D              |
@@ -197,10 +197,10 @@ OAA-CNN (paper baseline)          eat + LLRD
 sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | ch | Replica          | MP3D  ||  ch | Replica    | MP3D                        |
 |----|------------------|-------||-----|------------|-----------------------------|
-| 2  | 0.2711 WIN       |       ||  2  |            | 0.8991 WIN                  |
+| 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie | 0.8991 WIN                |
 | 4  | 0.2553 WIN       | 0.8335||  4  | 0.2575 WIN | 0.7920/0.7714(llrd65) WIN   |
-| 6  | 0.2336±0.005 WIN |       ||  6  | 0.2385 tie | (t)                         |
-| 8  | 0.2399 novd/(t)vd|       ||  8  | (t = sslam_r8vd_rep)| (t)                |
+| 6  | 0.2336±0.005 WIN | (t)   ||  6  | 0.2385 tie | (t)                         |
+| 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | (t)            |
 
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
@@ -349,3 +349,10 @@ r2 and r6.
 campaign (RMSE 0.4718 / mid 0.6698 / far 1.3952 all beat the CNN; MAE gap 0.0005 = tie by rule).
 The LLRD-on-Replica cost seen at r2/r6 (+0.005..0.009) vanishes at r8. Unified sslam+LLRD now:
 Rep r2/fb/r6/r8 all ties (never loses), MP3D r2/fb wins, r6/r8 training.
+
+### 2026-09-08: sslam_r2_mp3d lands — plain sslam wins the MP3D 2ch cell too
+Test MAE 0.8965 vs CNN 0.9084 (gap 0.0119 > tie threshold 0.01 → WIN; also below eat_llrd 0.9018
+and sslam_llrd 0.8991, both within-tie of each other). With this, plain sslam has never lost a
+completed cell: Replica r2/fb/r6 WIN, r8 exact tie; MP3D r2 WIN. Queue note: beyond(ITD) stage-3n
+now has queue priority per user; cs_r6/r8_rep deferred via placeholder until all 8 beyond jobs
+dispatch (stage3o auto-requeues them).
