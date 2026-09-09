@@ -202,6 +202,12 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | 0.7848 LOSS                 |
 | 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | 0.9861 dead-run (s1 retry) |
 
+Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
+| ch | Replica | MP3D |
+|----|---------|------|
+| 4  | 0.3125 LOSS (vs CNN -0.053; converged, val 0.330) | (t) |
+(r2/r6/r8 x both: training/queued)
+
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
@@ -390,3 +396,9 @@ late overfit). Same recipe trained fine at r6 (val 0.90 -> test 0.785) and eat n
 contamination ruled out (subset_aug=False gates vdrop off; stored kmax=4 is argparse default).
 stage3p queues a seed-1 retry that waits for all beyond dispatches (user priority) then takes
 an empty GPU. Cell verdict deferred to the retry; if s1 also collapses, record the LOSS.
+
+### 2026-09-09 (3): first Beyond-I2D cell — beyond_fb_rep 0.3125 (strict LOSS)
+Converged cleanly (val 0.3301, d1 0.760) but lands below every main baseline: CNN 0.2596,
+sslam family 0.2553-0.2659, EchoDiffusion 0.2695; only EchoScan (0.3516) is worse. First
+evidence that the ITD-style multi-branch attention port is uncompetitive against
+position-aware geometric attention on this task.
