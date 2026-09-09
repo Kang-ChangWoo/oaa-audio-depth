@@ -200,7 +200,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
 | 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7714(llrd65) WIN       |
 | 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | 0.7848 LOSS                 |
-| 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | (t)            |
+| 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | 0.9861 dead-run (s1 retry) |
 
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
@@ -381,3 +381,12 @@ near (0.400 vs 0.367) / mid (1.113 vs 1.103) / d1 (0.533 vs 0.559) all worse —
 observations on messy MP3D the near/mid precision loss dominates. Verdict split: plain sslam
 still unbeaten on its 5 completed cells; unified sslam+LLRD is now 1 win / 5 tie / 1 LOSS with
 MP3D r8 pending. The "one setting never loses anywhere" goal fails at MP3D r6.
+
+### 2026-09-09 (2): sslam_llrd_r8_mp3d — dead run (val plateau), s1 retry queued
+Test 0.9861 vs CNN 0.7467: nominally a strict LOSS, but the val trajectory shows a collapsed
+run — floor 1.1102 at ep6, then monotone worsening to 1.178 by ep29 (near-constant-depth trap +
+late overfit). Same recipe trained fine at r6 (val 0.90 -> test 0.785) and eat novd r8 reached
+0.7395, so this reads as seed/cell-specific instability, not a verdict on the setting. vdrop
+contamination ruled out (subset_aug=False gates vdrop off; stored kmax=4 is argparse default).
+stage3p queues a seed-1 retry that waits for all beyond dispatches (user priority) then takes
+an empty GPU. Cell verdict deferred to the retry; if s1 also collapses, record the LOSS.
