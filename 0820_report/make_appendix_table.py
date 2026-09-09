@@ -12,7 +12,7 @@ M=[('MAE','MAE'),('RMSE','RMSE'),('AbsRel','AbsRel'),('delta1','δ1'),('near<3',
 HIGHER={'delta1'}
 CELLS=[
  ('Replica 2ch',rep,[('OAA-CNN','oaa_r2_fin'),('EchoScan','es_r2_fin'),('EchoDiffusion','eco_r2_fin'),('eat+LLRD','0820_eatllrd_r2_rep'),('sslam','0820_sslam_r2_rep'),('sslam+LLRD','0820_sslam_llrd_r2_rep')]),
- ('Replica 4ch',rep,[('OAA-CNN','oaa_fb_fin'),('EchoScan','es_fb_fin'),('EchoDiffusion','eco_fb_fin'),('eat+LLRD','0820_eatllrd_fb_rep'),('sslam s0','0820_sslam_fb_rep'),('sslam s1','0820_sslam_s1_fb_rep'),('sslam s2','0820_sslam_s2_fb_rep'),('sslam+LLRD','0820_sslam_llrd_fb_rep')]),
+ ('Replica 4ch',rep,[('OAA-CNN','oaa_fb_fin'),('EchoScan','es_fb_fin'),('EchoDiffusion','eco_fb_fin'),('Beyond-I2D','0820_beyond_fb_rep'),('eat+LLRD','0820_eatllrd_fb_rep'),('sslam s0','0820_sslam_fb_rep'),('sslam s1','0820_sslam_s1_fb_rep'),('sslam s2','0820_sslam_s2_fb_rep'),('sslam+LLRD','0820_sslam_llrd_fb_rep')]),
  ('Replica 6ch',rep,[('OAA-CNN','oaa_r6_fin'),('EchoScan','es_r6_fin'),('EchoDiffusion','eco_r6_fin'),('eat+LLRD','0820_eatllrd_r6_rep'),('sslam s0','0820_sslam_r6_rep'),('sslam s1','0820_sslam_r6_rep_s1'),('sslam s2','0820_sslam_r6_rep_s2'),('sslam+LLRD','0820_sslam_llrd_r6_rep')]),
  ('Replica 8ch',rep,[('OAA-CNN','oaa_r8_fin'),('EchoScan','es_r8_fin'),('EchoDiffusion','eco_r8_fin'),('eat+LLRD vd','0820_eatllrd_r8_rep'),('sslam vd','0820_sslam_r8vd_rep'),('sslam+LLRD vd','0820_sslam_llrd_r8vd_rep')]),
  ('MP3D 2ch',mp,[('OAA-CNN','oaa_r2_fin'),('EchoScan','es_r2_fin'),('EchoDiffusion','eco_r2_fin'),('eat+LLRD','0820_eatllrd_r2_mp3d'),('eat+LLRD+cs','0820_eatllrd_cs_r2_mp3d'),('sslam','0820_sslam_r2_mp3d'),('sslam+LLRD','0820_sslam_llrd_r2_mp3d')]),
