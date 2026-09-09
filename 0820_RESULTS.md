@@ -205,8 +205,9 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
 | ch | Replica | MP3D |
 |----|---------|------|
+| 2  | 0.3150 LOSS (vs CNN -0.026) | (t) |
 | 4  | 0.3125 LOSS (vs CNN -0.053; converged, val 0.330) | (t) |
-(r2/r6/r8 x both: training/queued)
+(r6/r8 rep + all mp3d: training/queued)
 
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
@@ -411,3 +412,10 @@ at fb (0.2644 near-for-mid trade); at r2 convstem is a net gain on BOTH datasets
 underdetermined (sparse mics) or noisy (MP3D); it only trades on clean+well-observed cells.
 cs scorecard: 3 strict wins (Rep r2, MP3D r2 record, MP3D fb record), 1 fail (Rep fb).
 Also noted: 0820_sslam_r8_mp3d (plain sslam MP3D 8ch) still training ep12/30 — added to watch.
+
+### 2026-09-09 (5): beyond_r2_rep 0.3150 — second Beyond-I2D cell, strict LOSS
+vs CNN 0.2894 (gap -0.0256) and far behind every AFM (sslam 0.2711, cs 0.2754). Notably beyond
+shows almost NO channel scaling on Replica (r2 0.3150 vs fb 0.3125 — only 0.0025 apart, where
+every other model gains 0.02-0.03 from 2->4 mics): consistent with its position-blind channel
+handling failing to exploit added observations, the same diagnosis as EchoDiffusion's
+non-monotonic scaling but even flatter.
