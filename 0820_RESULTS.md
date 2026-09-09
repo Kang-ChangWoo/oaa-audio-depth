@@ -211,7 +211,7 @@ Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
 EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
-| 2  | 0.2854  | 0.9007 tie(+) | | 2  | (t)         | 0.8884 WIN (r2 record) |
+| 2  | 0.2854  | 0.9007 tie(+) | | 2  | 0.2754 WIN  | 0.8884 WIN (r2 record) |
 | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
@@ -402,3 +402,12 @@ Converged cleanly (val 0.3301, d1 0.760) but lands below every main baseline: CN
 sslam family 0.2553-0.2659, EchoDiffusion 0.2695; only EchoScan (0.3516) is worse. First
 evidence that the ITD-style multi-branch attention port is uncompetitive against
 position-aware geometric attention on this task.
+
+### 2026-09-09 (4): missed eval recovered — cs_r2_rep 0.2754, a strict WIN on clean Replica
+eatllrd_cs_r2_rep (finished earlier, eval overlooked) tests at 0.2754 vs CNN 0.2894
+(gap 0.0140 > 0.01). This REFINES the convstem law: "zero-sum on clean Replica" holds only
+at fb (0.2644 near-for-mid trade); at r2 convstem is a net gain on BOTH datasets
+(Rep 0.2754 WIN, MP3D 0.8884 record). New law: convstem helps wherever the problem is
+underdetermined (sparse mics) or noisy (MP3D); it only trades on clean+well-observed cells.
+cs scorecard: 3 strict wins (Rep r2, MP3D r2 record, MP3D fb record), 1 fail (Rep fb).
+Also noted: 0820_sslam_r8_mp3d (plain sslam MP3D 8ch) still training ep12/30 — added to watch.
