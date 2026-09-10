@@ -198,7 +198,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | ch | Replica          | MP3D  ||  ch | Replica    | MP3D                        |
 |----|------------------|-------||-----|------------|-----------------------------|
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
-| 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7714(llrd65) WIN       |
+| 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7803±.009 tie(+) (llrd65 2s, s1 arbiter queued) |
 | 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | 0.7848 LOSS                 |
 | 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | 0.9861 dead-run (s1 retry) |
 
@@ -426,3 +426,14 @@ vs CNN 0.2384 (gap -0.0598). Replica scaling picture for beyond: r2 0.3150 / fb 
 r6 0.2982 — some gain finally appears at 6 mics but the deficit vs CNN WIDENS with channels
 (-0.026 -> -0.053 -> -0.060): every extra observation helps the position-aware models more
 than it helps beyond. Only beyond_r8_rep remains on Replica.
+
+### 2026-09-10 (2): llrd65_fb_mp3d_s2 lands at 0.7892 — the llrd65 MP3D fb "win" falls to a tie
+Seed mean now 0.7803+-0.009 vs CNN 0.7849: gap 0.0046 < 0.01 -> tie(+). The single-seed 0.7714
+win was seed luck, the exact same failure mode the fb Replica cell taught us (0.2553 -> 3-seed
+tie). Arbiter s1 was found DEAD AT STARTUP (CUDA OOM when a co-tenant grabbed the GPU at
+dispatch time) — log archived as .oomcrash, stage3q requeues it on an empty GPU. The MP3D fb
+cell itself KEEPS its strict wins independently: eat+LLRD 3-seed 0.7717+-0.002 (gap 0.0132)
+and cs 0.7617 (gap 0.0232). Consequence for the unified-setting scorecard: its only win came
+from the llrd65 variant, so unified sslam+LLRD is now 0 W / 6 T / 1 L (+ r8 retry pending);
+the "wins under hard conditions" claim now rests on eat+LLRD and cs at MP3D 2/4ch and plain
+sslam at r2 — unchanged at the cell level, reshuffled at the family level.
