@@ -199,7 +199,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 |----|------------------|-------||-----|------------|-----------------------------|
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
 | 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7803±.009 tie(+) (llrd65 2s, s1 arbiter queued) |
-| 6  | 0.2336±0.005 tie(+) | (t)||  6  | 0.2385 tie | 0.7848 LOSS                 |
+| 6  | 0.2336±0.005 tie(+) | 0.8724 LOSS || 6 | 0.2385 tie | 0.7848 LOSS             |
 | 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | 0.9861 dead-run (s1 retry) |
 
 Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
@@ -215,7 +215,8 @@ EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
 | 2  | 0.2854  | 0.9007 tie(+) | | 2  | 0.2754 WIN  | 0.8884 WIN (r2 record) |
-| 6  | 0.2313 tie(+) | (t: was placeholder-deferred, running) |
+| 6  | 0.2313 tie(+) | (t) |
+| 8  | (t: cs_r8_rep) | 0.7373 tie(+) |
 | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
@@ -447,3 +448,16 @@ r6->r8 gain is 0.0001 (fully saturated at 6 mics) and the deficit vs CNN grows m
 convert additional observations into geometry; 318M params do not compensate for missing pose
 conditioning. cs_r6_rep 0.2313 (gap +0.0071, tie with AFM-side direction; near 0.1242 also
 beats CNN 0.1263) — convstem stays net-positive-or-tie everywhere except clean Rep fb.
+
+### 2026-09-10 (4): plain sslam loses MP3D r6 (0.8724) + missed cs_r8_mp3d eval recovered (0.7373)
+sslam_r6_mp3d test 0.8724 vs CNN 0.7502 (gap -0.122, LOSS) — plain sslam's first loss, and a
+big one. Recipe context: the default 0.1x recipe without LLRD was always known to underperform
+on MP3D (LLRD is "the key fix" there; sslam_fb_mp3d 0.8335 told the same story), so this is
+consistent law, not surprise. Verdict structure now clean at the CELL level:
+  - AFM strict-win cells (3): Rep 2ch, MP3D 2ch, MP3D 4ch
+  - CNN strict-win cell (1): MP3D 6ch — ALL AFM entries lose it (eat 0.7736 / sslam+LLRD 0.7848
+    / plain sslam 0.8724; cs_r6_mp3d still training, last open entry)
+  - Ties (4): Rep 4/6/8ch, MP3D 8ch (inside every tie: near=CNN, far=AFM)
+No single AFM setting is unbeaten across all cells anymore; the family-level "never loses"
+claims are all retired. cs_r8_mp3d (finished earlier, eval overlooked) = 0.7373 vs CNN 0.7467:
+gap 0.0094 tie(+), near 0.3666 ~ CNN 0.3646 — convstem stays net-positive-or-tie off clean-fb.
