@@ -215,7 +215,7 @@ EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
 | 2  | 0.2854  | 0.9007 tie(+) | | 2  | 0.2754 WIN  | 0.8884 WIN (r2 record) |
-| 6  | 0.2313 tie(+) | (t) |
+| 6  | 0.2313 tie(+) | 0.7879 LOSS |
 | 8  | (t: cs_r8_rep) | 0.7373 tie(+) |
 | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
@@ -461,3 +461,12 @@ consistent law, not surprise. Verdict structure now clean at the CELL level:
 No single AFM setting is unbeaten across all cells anymore; the family-level "never loses"
 claims are all retired. cs_r8_mp3d (finished earlier, eval overlooked) = 0.7373 vs CNN 0.7467:
 gap 0.0094 tie(+), near 0.3666 ~ CNN 0.3646 — convstem stays net-positive-or-tie off clean-fb.
+
+### 2026-09-11: cs_r6_mp3d 0.7879 — MP3D 6ch cell CLOSED against all four AFM variants
+vs CNN 0.7502 (gap -0.0377, LOSS). The cell's full roster: eat+LLRD 0.7736 / sslam+LLRD 0.7848 /
+eat+LLRD+cs 0.7879 / plain sslam 0.8724 — every AFM entry loses; even convstem, which wins or
+ties every other cell it entered, cannot crack it. MP3D 6ch is now a certified CNN stronghold:
+enough observations for geometry to be data-determined, data messy enough that AFM robustness
+does not pay, and (unlike 8ch) no redundancy for the encoder to exploit. cs family final-ish
+scorecard: 3 W (Rep r2, MP3D r2 record, MP3D fb record), 2 tie(+) (Rep r6, MP3D r8), 1 L
+(MP3D r6), 1 fail (Rep fb), cs_r8_rep still training.
