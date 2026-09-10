@@ -207,6 +207,7 @@ Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
 |----|---------|------|
 | 2  | 0.3150 LOSS (vs CNN -0.026) | (t) |
 | 6  | 0.2982 LOSS (vs CNN -0.060) | (t) |
+| 8  | 0.2981 LOSS (vs CNN -0.061) | (t) |
 | 4  | 0.3125 LOSS (vs CNN -0.053; converged, val 0.330) | (t) |
 (r6/r8 rep + all mp3d: training/queued)
 
@@ -214,6 +215,7 @@ EchoDiffusion                     eat+LLRD+convstem
 | ch | Replica | MP3D       |    | ch | Replica     | MP3D             |
 |----|---------|------------|    |----|-------------|------------------|
 | 2  | 0.2854  | 0.9007 tie(+) | | 2  | 0.2754 WIN  | 0.8884 WIN (r2 record) |
+| 6  | 0.2313 tie(+) | (t: was placeholder-deferred, running) |
 | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
@@ -437,3 +439,11 @@ and cs 0.7617 (gap 0.0232). Consequence for the unified-setting scorecard: its o
 from the llrd65 variant, so unified sslam+LLRD is now 0 W / 6 T / 1 L (+ r8 retry pending);
 the "wins under hard conditions" claim now rests on eat+LLRD and cs at MP3D 2/4ch and plain
 sslam at r2 — unchanged at the cell level, reshuffled at the family level.
+
+### 2026-09-10 (3): beyond Replica column COMPLETE + cs_r6_rep lands
+beyond_r8_rep 0.2981 (gap -0.0613, LOSS). Full Replica column: 0.3150/0.3125/0.2982/0.2981 —
+r6->r8 gain is 0.0001 (fully saturated at 6 mics) and the deficit vs CNN grows monotonically
+(-0.026/-0.053/-0.060/-0.061). Diagnosis finalized: the position-blind ITD-style port cannot
+convert additional observations into geometry; 318M params do not compensate for missing pose
+conditioning. cs_r6_rep 0.2313 (gap +0.0071, tie with AFM-side direction; near 0.1242 also
+beats CNN 0.1263) — convstem stays net-positive-or-tie everywhere except clean Rep fb.
