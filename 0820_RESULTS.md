@@ -216,7 +216,7 @@ EchoDiffusion                     eat+LLRD+convstem
 |----|---------|------------|    |----|-------------|------------------|
 | 2  | 0.2854  | 0.9007 tie(+) | | 2  | 0.2754 WIN  | 0.8884 WIN (r2 record) |
 | 6  | 0.2313 tie(+) | 0.7879 LOSS |
-| 8  | (t: cs_r8_rep) | 0.7373 tie(+) |
+| 8  | 0.2291 tie(+) (cell record) | 0.7373 tie(+) |
 | 4  | 0.2644 fail | 0.7617 WIN (fb record) |
 | 4  | 0.2695  | 0.7928     |
 | 6  | 0.2556  | 0.7786     |
@@ -470,3 +470,11 @@ enough observations for geometry to be data-determined, data messy enough that A
 does not pay, and (unlike 8ch) no redundancy for the encoder to exploit. cs family final-ish
 scorecard: 3 W (Rep r2, MP3D r2 record, MP3D fb record), 2 tie(+) (Rep r6, MP3D r8), 1 L
 (MP3D r6), 1 fail (Rep fb), cs_r8_rep still training.
+
+### 2026-09-11 (2): cs_r8_rep 0.2291 — new Replica 8ch campaign record (strict tie)
+vs CNN 0.2368: gap 0.0077 -> tie(+) by rule, but the direction is dominant across the board:
+near 0.1224 beats CNN 0.1250, RMSE 0.4764 vs 0.4810, d1 0.8568 (cell best), far 1.4424 vs
+1.5890. Beats the previous cell record (sslam+LLRD vd 0.2363) by 0.007. cs (+vdrop, per the
+r8-Replica vdrop law) final scorecard: 3 W (Rep r2, MP3D r2, MP3D fb — the last two records),
+3 tie(+) (Rep r6/r8, MP3D r8), 1 L (MP3D r6), 1 fail (Rep fb). convstem emerges as the single
+strongest overall variant of the campaign.
