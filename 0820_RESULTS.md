@@ -206,6 +206,7 @@ Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
 | ch | Replica | MP3D |
 |----|---------|------|
 | 2  | 0.3150 LOSS (vs CNN -0.026) | (t) |
+| 6  | 0.2982 LOSS (vs CNN -0.060) | (t) |
 | 4  | 0.3125 LOSS (vs CNN -0.053; converged, val 0.330) | (t) |
 (r6/r8 rep + all mp3d: training/queued)
 
@@ -419,3 +420,9 @@ shows almost NO channel scaling on Replica (r2 0.3150 vs fb 0.3125 — only 0.00
 every other model gains 0.02-0.03 from 2->4 mics): consistent with its position-blind channel
 handling failing to exploit added observations, the same diagnosis as EchoDiffusion's
 non-monotonic scaling but even flatter.
+
+### 2026-09-10: beyond_r6_rep 0.2982 — third Beyond-I2D cell, strict LOSS
+vs CNN 0.2384 (gap -0.0598). Replica scaling picture for beyond: r2 0.3150 / fb 0.3125 /
+r6 0.2982 — some gain finally appears at 6 mics but the deficit vs CNN WIDENS with channels
+(-0.026 -> -0.053 -> -0.060): every extra observation helps the position-aware models more
+than it helps beyond. Only beyond_r8_rep remains on Replica.
