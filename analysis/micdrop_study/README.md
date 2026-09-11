@@ -54,3 +54,24 @@ DATA_MODULE=data_0422 R0422_SPLIT=off3 EVAL_BS=6 CUDA_VISIBLE_DEVICES=3 \
 The curve itself is computed by the repo's existing `analysis/micdrop.py` (extended here to
 handle waveform-input models and the `comparison_0820/` run directory); nothing about the
 released protocol changed, so previously published mic-drop numbers still reproduce.
+
+## Result (15/15 models, 2026-09-11)
+
+Full numbers in `table.md`, curves in `curves.json`, figure in `curve.png`.
+
+1. **Without mic-drop training nothing degrades gracefully.** Ours and prior work alike lose
+   80-95% of their accuracy by 6 live mics; ret@1 lands in 3.1-4.2x for every such model.
+2. **With mic-drop training the whole family separates.** All six of our mic-drop-trained runs
+   (CNN k<=4 / k<=6 and four AFM variants) sit in a single band well below everything else, and
+   the augmentation transfers across backbones: AFM ret@1 goes 3.1-3.3x -> 2.19-2.59x.
+3. **Inside that band the ranking splits by where training-time drop reached.** eat+LLRD+cs +vd
+   is best from 8 down to 3 mics (0.2291 at 8, the campaign cell record); OAA-CNN +vd(k<=6) wins
+   at 2 and 1 mic -- it is the only model that saw two-live-mic states in training (k<=6), every
+   other run stopped at k<=4.
+4. **Augmentation alone is not enough.** EchoDiffusion's own channel dropout moves it 3.55x ->
+   3.24x, about a sixth of the recovery we get; its 6-mic error (0.2915) never returns to its
+   own 8-mic level (0.2600). The augmentation pays off on top of position-aware geometric
+   attention, not by itself.
+5. **ret@1 is not a ranking.** ResNet-18 (3.09x), Beyond-I2D (3.17x) and ViT-B (3.26x) look
+   flatter than our un-augmented CNN (4.09x) only because their 8-mic starting point is already
+   poor. Judge on absolute MAE at each mic count.
