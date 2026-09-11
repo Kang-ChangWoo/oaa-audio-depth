@@ -198,7 +198,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | ch | Replica          | MP3D  ||  ch | Replica    | MP3D                        |
 |----|------------------|-------||-----|------------|-----------------------------|
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
-| 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7803±.009 tie(+) (llrd65 2s, s1 arbiter queued) |
+| 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7787±.009 tie(+) (llrd65, 3 seeds) |
 | 6  | 0.2336±0.005 tie(+) | 0.8724 LOSS || 6 | 0.2385 tie | 0.7848 LOSS             |
 | 8  | 0.2399 novd/0.2368 vd tie | 0.9782 LOSS | 8 | 0.2363 vd tie | 0.9861 LOSS (s1 retry running) |
 
@@ -492,3 +492,11 @@ Emerging law: on messy MP3D, the sslam (mixture-SSL) backbone degrades as observ
 r2 0.8965 WIN -> fb 0.8335 -> r6 0.8724 LOSS -> r8 0.978 LOSS — whereas the eat backbone
 improves monotonically (0.9018/0.7717/0.7736/0.7395). The AFM advantage on MP3D is backbone-
 specific and channel-dependent, not a property of "AFM encoders" in general.
+
+### 2026-09-11 (4): llrd65 MP3D fb CLOSED at 3 seeds — 0.7787±0.009, tie confirmed
+Arbiter s1 tests 0.7756, giving seeds (0.7714 / 0.7756 / 0.7892) -> mean 0.7787±0.0093 vs CNN
+0.7849: gap 0.0062 < 0.01, so the cell stays a tie(+) exactly as the 2-seed reading predicted.
+The single-seed 0.7714 "win" is now retired on three seeds rather than two — the third seed did
+not rescue it. Unified sslam+LLRD's scorecard is unchanged (0 W / 6 T / 2 L incl. MP3D r8), and
+MP3D fb's strict wins remain eat+LLRD (3-seed 0.7717±0.002) and convstem (0.7617).
+This also completes every seed-hardening the campaign itself queued before stage3r.
