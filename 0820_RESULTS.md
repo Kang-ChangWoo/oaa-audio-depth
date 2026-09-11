@@ -500,3 +500,11 @@ The single-seed 0.7714 "win" is now retired on three seeds rather than two — t
 not rescue it. Unified sslam+LLRD's scorecard is unchanged (0 W / 6 T / 2 L incl. MP3D r8), and
 MP3D fb's strict wins remain eat+LLRD (3-seed 0.7717±0.002) and convstem (0.7617).
 This also completes every seed-hardening the campaign itself queued before stage3r.
+
+### 2026-09-12: stage3r first completion — sslamllrd_r8novd_rep 0.2424 (vdrop's Replica-r8 value, isolated)
+Unified setting at Replica r8 WITHOUT vdrop: test 0.2424 vs CNN 0.2368 (gap -0.0056, tie) and vs
+its own vdrop twin 0.2363 (+0.0061). Read against the established law this is the cleanest
+single measurement of what vdrop buys at this cell: same recipe, same seed, one flag -> 0.0061.
+It also completes the like-for-like (no-mic-drop) roster for the degradation study, where the
+unified setting previously had no entry. Band structure is the familiar trade: far 1.4236 beats
+CNN 1.5890 while near 0.1327 loses to 0.1250.

@@ -23,6 +23,7 @@ ROSTER = [
     ("OAA-CNN",              "ours",  False, "oaa_r8_novdrop"),
     ("eat+LLRD",             "ours",  False, "0820_eatllrd_r8novd_rep"),
     ("sslam",                "ours",  False, "0820_sslam_r8_rep"),
+    ("sslam+LLRD",           "ours",  False, "0820_sslamllrd_r8novd_rep"),
     # -- ours, trained WITH mic drop
     ("OAA-CNN +vd(k<=4)",    "ours",  True,  "oaa_r8_fin"),
     ("OAA-CNN +vd(k<=6)",    "ours",  True,  "oaa_r8_kany"),
