@@ -9,8 +9,9 @@ GROUPS
          only setting in which our encoders and the prior-work baselines are directly comparable
          (no prior-work model uses mic-drop augmentation).
   prior  published baselines, all no-mic-drop by construction.
-  vdrop  reference only: OAA-CNN trained WITH mic drop (k<=4 released, k<=6 "kany"), included to
-         price what the augmentation buys. NOT part of the like-for-like comparison.
+  vdrop  the same architectures trained WITH mic drop (CNN k<=4 released and k<=6 "kany"; the
+         0820 AFM variants at k<=4). Not part of the like-for-like comparison against prior work,
+         but paired with novd it prices what the augmentation buys, per encoder family.
 """
 
 ROSTER = [
@@ -23,8 +24,15 @@ ROSTER = [
     ("Beyond-I2D",          "prior", "0820_beyond_r8_rep"),
     ("ResNet-18",           "prior", "rn_r8_fin"),
     ("ViT-B",               "prior", "vit_r8_fin"),
-    ("OAA-CNN +vdrop(k<=4)", "vdrop", "oaa_r8_fin"),
-    ("OAA-CNN +vdrop(k<=6)", "vdrop", "oaa_r8_kany"),
+    # vdrop group: the SAME architectures re-trained with mic-drop augmentation. Paired with the
+    # novd entries above this makes a {CNN, AFM} x {no mic-drop, mic-drop} 2x2 — the only way to
+    # separate "which encoder degrades gracefully" from "which encoder was taught to".
+    ("OAA-CNN +vd(k<=4)",   "vdrop", "oaa_r8_fin"),
+    ("OAA-CNN +vd(k<=6)",   "vdrop", "oaa_r8_kany"),
+    ("eat+LLRD +vd",        "vdrop", "0820_eatllrd_r8_rep"),
+    ("eat+LLRD+cs +vd",     "vdrop", "0820_eatllrd_cs_r8_rep"),
+    ("sslam +vd",           "vdrop", "0820_sslam_r8vd_rep"),
+    ("sslam+LLRD +vd",      "vdrop", "0820_sslam_llrd_r8vd_rep"),
 ]
 
 # EchoDiffusion needs its isolated env, so it runs through analysis/micdrop_eco.py

@@ -34,25 +34,29 @@ def main():
     have = [(lbl, grp, run) for lbl, grp, run in roster if run in data]
     missing = [run for _, _, run in roster if run not in data]
 
-    # ---- table
-    L = ["# Mic-drop degradation: 8 mics at train time, 1-8 at test time", "",
-         "Replica test (off3), MAE in metres. Channels are zeroed and the pose conditioning stays",
-         "truthful, so this is the *mic failure* curve, not a smaller-rig retrain. k live mics is the",
-         "mean over 3 fixed-seed random subsets. `ret@1` = MAE(1 mic) / MAE(8 mic): how much of the",
-         "8-mic error the model keeps when only one mic survives (lower is a flatter, more graceful",
-         "curve).", ""]
-    head = "| model | " + " | ".join(f"{m}mic" for m in MICS) + " | ret@1 |"
-    L += [head, "|" + "---|" * (len(MICS) + 2)]
-    for grp in GROUP_ORDER:
-        rows = [r for r in have if r[1] == grp]
-        if not rows:
-            continue
-        L.append(f"| **{GROUP_LABEL[grp]}** |" + " |" * (len(MICS) + 1))
-        for lbl, _, run in rows:
-            c = data[run]
-            cells = " | ".join(f"{c[m]:.4f}" if m in c else "—" for m in MICS)
-            ret = f"{c[1] / c[8]:.2f}x" if 1 in c and 8 in c else "—"
-            L.append(f"| {lbl} | {cells} | {ret} |")
+    # ---- table: ONE ranking over every model in the experiment. Training-time mic drop is a
+    # column, not a separate section — models trained with and without it are compared directly.
+    TRAIN_COL = {"novd": "no", "prior": "no", "vdrop": "yes"}
+    ORIGIN = {"novd": "ours", "prior": "prior work", "vdrop": "ours"}
+    L = ["# Mic-drop degradation: every model trained on 8 mics, tested on 8-1", "",
+         "Replica test (off3), MAE in metres. At inference k of the 8 channels are zeroed and the",
+         "pose conditioning stays truthful — the *mic failure* curve, not a smaller-rig retrain.",
+         "Each k is the mean over 3 fixed-seed random subsets. `mic-drop` says whether the model saw",
+         "dropped mics during TRAINING (no prior-work model does). `ret@1` = MAE(1 mic)/MAE(8 mic):",
+         "how much of the 8-mic error survives total rig loss — lower is a flatter, more graceful",
+         "curve. Sorted by 1-mic MAE (worst case first-class, since that is what the study is about).",
+         ""]
+    head = "| model | origin | mic-drop | " + " | ".join(f"{m}mic" for m in MICS) + " | ret@1 |"
+    L += [head, "|" + "---|" * (len(MICS) + 4)]
+    rank = sorted(have, key=lambda r: data[r[2]].get(1, float("inf")))
+    best = {m: min(data[r][m] for _, _, r in have if m in data[r]) for m in MICS}
+    for lbl, grp, run in rank:
+        c = data[run]
+        cells = " | ".join(
+            (f"**{c[m]:.4f}**" if abs(c[m] - best[m]) < 1e-9 else f"{c[m]:.4f}") if m in c else "—"
+            for m in MICS)
+        ret = f"{c[1] / c[8]:.2f}x" if 1 in c and 8 in c else "—"
+        L.append(f"| {lbl} | {ORIGIN[grp]} | {TRAIN_COL[grp]} | {cells} | {ret} |")
     if missing:
         L += ["", f"_pending: {', '.join(missing)}_"]
     open(f"{HERE}/table.md", "w").write("\n".join(L) + "\n")
@@ -64,7 +68,7 @@ def main():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["axes.unicode_minus"] = False   # default font has no U+2212
-    style = {"novd": ("-", 2.0), "prior": ("--", 1.4), "vdrop": (":", 1.6)}
+    style = {"novd": ("-", 2.0), "prior": ("--", 1.4), "vdrop": ("-.", 1.8)}
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
     for ax, logy in ((axes[0], False), (axes[1], True)):
         for lbl, grp, run in have:
@@ -86,8 +90,9 @@ def main():
         else:
             ax.set_title("linear scale")
     axes[0].legend(fontsize=8, frameon=False, ncol=2)
-    fig.suptitle("Mic failure at inference (trained on 8 mics, Replica test) — "
-                 "solid: ours no-mic-drop · dashed: prior work · dotted: mic-drop trained")
+    fig.suptitle("Mic failure at inference — every model trained on 8 mics (Replica test)\n"
+                 "solid: ours, no mic-drop in training · dashed: prior work · "
+                 "dash-dot: trained WITH mic drop")
     fig.tight_layout()
     fig.savefig(f"{HERE}/curve.png", dpi=110)
     print("\n".join(L))
