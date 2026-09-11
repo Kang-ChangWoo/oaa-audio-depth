@@ -75,7 +75,14 @@ def main():
         ax.set_xlabel("live mics"); ax.set_ylabel("test MAE (m)")
         ax.grid(alpha=.3); ax.spines[["top", "right"]].set_visible(False)
         if logy:
-            ax.set_yscale("log"); ax.set_title("log scale")
+            # plain decimal ticks: the default LogFormatter renders 10^-1 with U+2212, which the
+            # bundled font lacks, and the substituted glyph silently mangles the exponent.
+            from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+            ax.set_yscale("log")
+            ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 3.0, 5.0), numticks=12))
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.set_title("log scale")
         else:
             ax.set_title("linear scale")
     axes[0].legend(fontsize=8, frameon=False, ncol=2)
