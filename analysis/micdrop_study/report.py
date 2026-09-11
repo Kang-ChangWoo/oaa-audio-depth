@@ -63,6 +63,7 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    plt.rcParams["axes.unicode_minus"] = False   # default font has no U+2212
     style = {"novd": ("-", 2.0), "prior": ("--", 1.4), "vdrop": (":", 1.6)}
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
     for ax, logy in ((axes[0], False), (axes[1], True)):
