@@ -19,7 +19,7 @@ GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 
 RUNS=$(python3 -c "
 from analysis.micdrop_study.roster import ROSTER
-print(' '.join(r for _, _, r in ROSTER))")
+print(' '.join(e[-1] for e in ROSTER))")
 
 for run in $RUNS; do
   shard="$OUT/$run.json"; claim="$OUT/.$run.claim"
@@ -41,7 +41,7 @@ for run in $RUNS; do
 done
 # EchoDiffusion lives in its own env (fp32, own deps) and has its own runner with the identical
 # protocol and output format, so its shard merges straight into the study.
-eco=$(python3 -c "from analysis.micdrop_study.roster import ECO; print(ECO[2])")
+eco=$(python3 -c "from analysis.micdrop_study.roster import ECO; print(ECO[-1])")
 shard="$OUT/$eco.json"; claim="$OUT/.$eco.claim"
 if [ -n "${ECHODIFF_PY:-}" ] && [ ! -e "$shard" ] && ( set -o noclobber; : > "$claim" ) 2>/dev/null; then
   while :; do
