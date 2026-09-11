@@ -1,8 +1,13 @@
 """Progressive mic-drop curve at inference: zero k of 8 channels (k=0..7), poses truthful.
 
-kany trained with vdrop k in {1..6}, so states down to 2 live mics were seen in training;
-k=7 (single mic) is extrapolation. For each k we average 3 fixed-seed random subsets
-(exhaustive C(8,k) is too many). One data pass evaluates every variant (loader dominates).
+Remaining live mics = nch-k, so the curve sweeps 8,7,...,1 mic. Dropped channels are zeroed
+and the pose/geometry conditioning is left truthful — the "a mic died" scenario, not a
+re-architected smaller rig. For each k we average 3 fixed-seed random subsets (exhaustive
+C(8,k) is too many). One data pass evaluates every variant (the loader dominates runtime).
+
+Models trained WITH vdrop (oaa_r8_fin k<=4, oaa_r8_kany k<=6) saw degraded states during
+training; models trained without it (oaa_r8_novdrop, the 0820 *novd* runs, and every prior-work
+baseline) are extrapolating at every k>0. analysis/micdrop_study/ contrasts the two groups.
 
   DATA_MODULE=data_0422 R0422_SPLIT=off3 EVAL_BS=6 CUDA_VISIBLE_DEVICES=7 \
     python analysis/micdrop.py --run-name oaa_r8_kany
@@ -39,6 +44,8 @@ def main():
     ap.add_argument("--run-name", nargs="+", required=True)
     ap.add_argument("--ckpt", default="best")
     ap.add_argument("--out", default="comparison/eval_micdrop.json")
+    ap.add_argument("--dirs", nargs="+", default=["out", "comparison", "comparison_0820"],
+                    help="run-directory search path (0820 campaign runs live in comparison_0820/)")
     a = ap.parse_args()
     device = torch.device("cuda")
     saved = {}
@@ -46,18 +53,20 @@ def main():
         try: saved = json.load(open(a.out))
         except Exception: saved = {}
     for run in a.run_name:
-        rd = resolve_run(run, ["out", "comparison"])
+        rd = resolve_run(run, a.dirs)
         ck = torch.load(os.path.join(rd, f"{a.ckpt}.pth"), map_location="cpu", weights_only=False)
         model, dmode, nch, kind, poses = build(ck["args"], _DM)
         model.load_state_dict(ck["state_dict"]); model.to(device).eval()
         max_depth = ck["args"].get("max_depth", 10.0)
         vs = variants_for(nch)
-        ld = _DM.loader("test", int(os.environ.get("EVAL_BS", "6")), False, 5, dmode)
+        bs = int(os.environ.get("EVAL_BS", "6"))
+        # EchoScan consumes raw waveforms; everything else consumes the spectrogram stack.
+        ld = (_DM.wave_loader if kind == "wave" else _DM.loader)("test", bs, False, 5, dmode)
         wlat = cos_lat(256, device).view(1, 1, 256, 1)
         MK = ["MAE", "RMSE", "AbsRel", "log10", "delta1", "delta2", "delta3"]
         acc = {t: {k: 0.0 for k in MK} | {"n": 0} for t, _ in vs}
         for b in ld:
-            x0 = b["spec"][:, :nch].to(device)
+            x0 = b["wave" if kind == "wave" else "spec"][:, :nch].to(device)
             gt = b["depth"].to(device) * max_depth; mask = b["mask"].to(device)
             w = wlat * mask; B = x0.shape[0]
             pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
