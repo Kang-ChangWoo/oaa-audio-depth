@@ -200,7 +200,7 @@ sslam (default 0.1x recipe)       sslam + LLRD (unified-setting candidate)
 | 2  | 0.2711 WIN       | 0.8965 WIN | 2 | 0.2805 tie(+) | 0.8991 tie(+)          |
 | 4  | 0.2659±.012 tie  | 0.8335||  4  | 0.2575 tie(+) | 0.7803±.009 tie(+) (llrd65 2s, s1 arbiter queued) |
 | 6  | 0.2336±0.005 tie(+) | 0.8724 LOSS || 6 | 0.2385 tie | 0.7848 LOSS             |
-| 8  | 0.2399 novd/0.2368 vd tie ||  8 | 0.2363 vd tie(best r8) | 0.9861 dead-run (s1 retry) |
+| 8  | 0.2399 novd/0.2368 vd tie | 0.9782 LOSS | 8 | 0.2363 vd tie | 0.9861 LOSS (s1 retry running) |
 
 Beyond-I2D (audio-only port, 318M; Parida et al. CVPR'21)
 | ch | Replica | MP3D |
@@ -478,3 +478,17 @@ near 0.1224 beats CNN 0.1250, RMSE 0.4764 vs 0.4810, d1 0.8568 (cell best), far 
 r8-Replica vdrop law) final scorecard: 3 W (Rep r2, MP3D r2, MP3D fb — the last two records),
 3 tie(+) (Rep r6/r8, MP3D r8), 1 L (MP3D r6), 1 fail (Rep fb). convstem emerges as the single
 strongest overall variant of the campaign.
+
+### 2026-09-11 (3): sslam_r8_mp3d 0.9782 — and a RETRACTION of the "dead run" diagnosis
+Plain sslam MP3D r8 tests at 0.9782 vs CNN 0.7467 (gap -0.232, LOSS). Crucially its val
+trajectory has the SAME shape I earlier called a seed-specific collapse for sslam_llrd_r8_mp3d:
+floor 1.1037 at ep13, then monotone worsening to 1.168 by ep29 (llrd s0: floor 1.1102 at ep6 ->
+1.178). And the s1 retry now running is floored at the same ~1.10 (best 1.0985 at ep3, ep6
+1.1043). Three independent runs (2 recipes x 2 seeds so far) all hit the identical ~1.10 val
+plateau. RETRACTION: sslam_llrd_r8_mp3d 0.9861 was NOT a dead run — the sslam family simply
+fails at MP3D r8, and my seed-instability call on 09-09 was wrong. The s1 retry is kept running
+as confirmation, but the cell verdict should be read as a systematic LOSS.
+Emerging law: on messy MP3D, the sslam (mixture-SSL) backbone degrades as observations grow —
+r2 0.8965 WIN -> fb 0.8335 -> r6 0.8724 LOSS -> r8 0.978 LOSS — whereas the eat backbone
+improves monotonically (0.9018/0.7717/0.7736/0.7395). The AFM advantage on MP3D is backbone-
+specific and channel-dependent, not a property of "AFM encoders" in general.
