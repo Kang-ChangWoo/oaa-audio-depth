@@ -508,3 +508,35 @@ single measurement of what vdrop buys at this cell: same recipe, same seed, one 
 It also completes the like-for-like (no-mic-drop) roster for the degradation study, where the
 unified setting previously had no entry. Band structure is the familiar trade: far 1.4236 beats
 CNN 1.5890 while near 0.1327 loses to 0.1250.
+
+### 2026-09-14: stage3r first wave (14 runs) — the untried combination pays off, two single-seed wins retire
+
+**A. sslam+LLRD+convstem, the campaign's largest blind spot, is now the strongest AFM setting.**
+  Rep  r2 0.2670 WIN (Δ+0.0224, CELL RECORD, beats sslam 0.2711)
+  Rep  fb 0.2560 tie(+)  (best of the sslam family at this cell)
+  Rep  r6 0.2378 tie(+)   Rep r8 0.2402 tie(-)
+  MP3D r2 0.8888 WIN (Δ+0.0196)   MP3D fb 0.7744 WIN (Δ+0.0105)
+  MP3D r6 **0.7473 tie(+)** -- and this is the headline: MP3D 6ch was the "certified CNN
+  stronghold" where all four earlier AFM variants lost (eat 0.7736 / sslam+LLRD 0.7848 /
+  cs 0.7879 / plain sslam 0.8724). sslam+LLRD+cs is the first AFM entry to come in BELOW the
+  CNN there (0.7473 vs 0.7502). By the strict rule it is a tie, not a win, but the cell is no
+  longer a CNN win: the campaign's one-cell CNN stronghold is gone.
+  Scorecard for the new combination: 3 W / 4 T / 0 L (MP3D r8 still training).
+
+**B. Seed-hardening retires two more single-seed wins** (the pattern now holds five for five):
+  eat+LLRD  Rep  r2: s0 0.2762 / s1 0.2885 -> 0.2823, Δ+0.0071 -> TIE (was WIN)
+  sslam     MP3D r2: s0 0.8965 / s1 0.9035 -> 0.9000, Δ+0.0084 -> TIE (was WIN)
+  Surviving with two seeds: sslam Rep r2 0.2775 (Δ+0.0119 WIN, barely) and
+  eat+LLRD+cs Rep r2 0.2751 (Δ+0.0143 WIN, the most seed-stable of the three: 0.2754/0.2748).
+
+**C. LLRD 0.85 beats 0.75 on the cell where LLRD cost the most.** sslam llrd85 Rep r2 = 0.2735
+  vs llrd75 0.2805 (-0.0070) and vs CNN Δ+0.0159 WIN. The Replica LLRD penalty was a decay-rate
+  artefact, not an intrinsic cost of layer-wise decay. r6 probe still training.
+
+**D. vdrop's paired value at Rep r8, second measurement.** cs novd 0.2427 vs cs+vd 0.2291 =
+  0.0136 (the sslam+LLRD pair gave 0.0061). Both confirm vdrop helps at this cell; magnitude is
+  variant-dependent.
+
+**E. MP3D r8 sslam failure confirmed on a third seed.** sslam+LLRD s1 0.9751 (s0 0.9861, plain
+  sslam 0.9782). Three runs, two recipes, two seeds -> systematic, as retracted-and-restated on
+  09-11.
