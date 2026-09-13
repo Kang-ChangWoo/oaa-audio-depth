@@ -46,7 +46,13 @@ def main():
     p.add_argument("--audio-backbone", required=True, choices=list(BACKBONES))
     p.add_argument("--afm-lr-ratio", type=float, default=0.1)   # pretrained-AFM LR = ratio * lr
     p.add_argument("--afm-random-init", action="store_true")    # Stage-2 ablation: same arch, no pretrained init
-    p.add_argument("--afm-stem", default="linear", choices=["linear", "conv"])  # conv = 4x stride-2 conv patch stem
+    # patch stem (A): conv = released 4x stride-2 3x3; conv_res/conv_ms/conv_fact = echo-specific variants
+    p.add_argument("--afm-stem", default="linear",
+                   choices=["linear", "conv", "conv_res", "conv_ms", "conv_fact"])
+    # (B) mic-differential residual on the AFM tokens: D_i = S_i - mean_j S_j, injected zero-init
+    p.add_argument("--mic-diff", default="none", choices=["none", "res", "gate", "gate_ctx"])
+    # (C) zero-init residual from the EXISTING fine CNN tokens into the coarse stream
+    p.add_argument("--fine-res", action="store_true")
     p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
     p.add_argument("--afm-input-norm", default="std", choices=["std", "db", "db_minmax"])  # AFM input statistics
     p.add_argument("--loss-absrel", type=float, default=0.0)    # + lambda * masked AbsRel (near-field upweighting; 0 = paper L1)

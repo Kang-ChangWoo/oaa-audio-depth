@@ -154,6 +154,82 @@ def _interp_pos(pos, src_grid, layout, gh, gw):
     return g.flatten(2).transpose(1, 2).reshape(1, gh * gw, D)            # freq-major rows, like our patch conv
 
 
+# --------------------------------------------------------------------------- conv-stem zoo (A)
+# Every stem maps (B,1,256,512) -> (B,768,16,32): the same token grid as the 16x16 linear patch, so
+# the pretrained pos-embed, the CLS handling and everything downstream are untouched. Only the way the
+# 16x downsample is spent differs. Parameter counts (vs A0 "conv" = 2.139M) are asserted in the tests.
+
+
+class _ResTempStem(nn.Module):
+    """A1 residual temporal stem: one stride-2 3x5 entry, a stride-1 residual 3x5 pair (longer receptive
+    field along TIME than frequency -- echo structure is a time series per frequency band), then three
+    stride-2 3x3 convs to the ViT width. +5.7% params over A0."""
+    def __init__(self, dim, ch0=64):
+        super().__init__()
+        self.c1 = nn.Conv2d(1, ch0, (3, 5), 2, (1, 2))
+        self.n1 = nn.GroupNorm(8, ch0)
+        self.r1 = nn.Conv2d(ch0, ch0, (3, 5), 1, (1, 2))
+        self.nr = nn.GroupNorm(8, ch0)
+        self.r2 = nn.Conv2d(ch0, ch0, (3, 5), 1, (1, 2))
+        self.rest = nn.Sequential(nn.Conv2d(ch0, 128, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(128, 256, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(256, dim, 3, 2, 1))
+        nn.init.zeros_(self.r2.weight); nn.init.zeros_(self.r2.bias)       # residual branch starts as identity
+
+    def forward(self, x):
+        h = F.gelu(self.n1(self.c1(x)))
+        h = h + self.r2(F.gelu(self.nr(self.r1(h))))
+        return self.rest(h)
+
+
+class _MultiScaleStem(nn.Module):
+    """A2 two-branch multi-scale stem: after one stride-2 entry, a plain 3x3 branch (early/local echo)
+    and a temporally dilated 3x3 branch (slightly longer temporal structure) are concatenated and
+    projected back. Exactly two branches, no Inception fan-out. +3.8% params over A0."""
+    def __init__(self, dim, ch0=64):
+        super().__init__()
+        self.c1 = nn.Conv2d(1, ch0, 3, 2, 1)
+        self.b_local = nn.Conv2d(ch0, ch0, 3, 1, 1)
+        self.b_dilat = nn.Conv2d(ch0, ch0, 3, 1, padding=(1, 2), dilation=(1, 2))   # dilate TIME only
+        self.merge = nn.Conv2d(2 * ch0, ch0, 1)
+        self.rest = nn.Sequential(nn.Conv2d(ch0, 128, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(128, 256, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(256, dim, 3, 2, 1))
+
+    def forward(self, x):
+        h = F.gelu(self.c1(x))
+        h = self.merge(torch.cat([self.b_local(h), self.b_dilat(h)], 1))
+        return self.rest(F.gelu(h))
+
+
+class _FactorizedStem(nn.Module):
+    """A3 factorized time/frequency stem: a 3x1 frequency conv then a 1x5 temporal conv replace the first
+    square conv, separating the two roles at a lower parameter cost. +1.0% params over A0."""
+    def __init__(self, dim, ch0=64):
+        super().__init__()
+        self.f = nn.Conv2d(1, ch0, (3, 1), (2, 1), (1, 0))
+        self.t = nn.Conv2d(ch0, ch0, (1, 5), (1, 2), (0, 2))
+        self.rest = nn.Sequential(nn.Conv2d(ch0, 128, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(128, 256, 3, 2, 1), nn.GELU(),
+                                  nn.Conv2d(256, dim, 3, 2, 1))
+
+    def forward(self, x):
+        return self.rest(F.gelu(self.t(F.gelu(self.f(x)))))
+
+
+def _plain_conv_stem(dim):
+    """A0 (released): 4 x stride-2 3x3 convs, trailing GELU dropped (linear-out like the ViT stem)."""
+    ch = [1, 64, 128, 256, dim]
+    layers = []
+    for i in range(4):
+        layers += [nn.Conv2d(ch[i], ch[i + 1], 3, 2, 1), nn.GELU()]
+    return nn.Sequential(*layers[:-1])
+
+
+_STEMS = {"linear": None, "conv": _plain_conv_stem, "conv_res": _ResTempStem,
+          "conv_ms": _MultiScaleStem, "conv_fact": _FactorizedStem}
+
+
 class AFMBackbone(nn.Module):
     """Pretrained ViT-B/16 audio encoder with a task-specific patch embedding.
     forward(x: [B*, 1, 256, 512] magnitude spec) -> [B*, lh*lw, out_dim] patch tokens (no CLS/no pooling)."""
@@ -163,7 +239,7 @@ class AFMBackbone(nn.Module):
                  input_norm="std"):
         super().__init__()
         assert name in _SPECS, f"unknown audio backbone {name} (choose from {list(_SPECS)})"
-        assert stem in ("linear", "conv"), f"bad afm stem {stem}"
+        assert stem in _STEMS, f"bad afm stem {stem} (choose from {list(_STEMS)})"
         # AFM input statistics: "std" = log1p + per-sample standardize (default);
         # "db" = 20*log10 (AudioSet log-mel-like) + per-sample standardize;
         # "db_minmax" = dB + per-sample min-max to [0,1] (BAT's native per_sample_minmax_after_db).
@@ -176,15 +252,9 @@ class AFMBackbone(nn.Module):
         self.grid_hw = (256 // ph, 512 // pw)                             # token grid (freq rows, time cols)
         M = self.grid_hw[0] * self.grid_hw[1]
         assert M == lh * lw, f"patch {ph}x{pw} gives {M} tokens, OAA needs {lh * lw}"
-        if stem == "conv":
-            # conv stem variant ("early convolutions help transformers"): 4 x stride-2 3x3 convs -> same
-            # 16x32 grid but sub-patch locality preserved. NEW params (base LR); linear patch is the default.
-            assert (ph, pw) == (16, 16), "conv stem only supports the 16x16 grid"
-            ch = [1, 64, 128, 256, self.DIM]
-            layers = []
-            for i in range(4):
-                layers += [nn.Conv2d(ch[i], ch[i + 1], 3, 2, 1), nn.GELU()]
-            self.patch = nn.Sequential(*layers[:-1])                      # drop trailing GELU (linear-out like ViT stem)
+        if stem != "linear":
+            assert (ph, pw) == (16, 16), "conv stems only support the 16x16 grid"
+            self.patch = _STEMS[stem](self.DIM)
         else:
             self.patch = nn.Conv2d(1, self.DIM, (ph, pw), (ph, pw))       # NEW (task-specific, base LR)
         self.pos_embed = nn.Parameter(torch.zeros(1, lh * lw, self.DIM))  # pretrained (interpolated)
@@ -327,18 +397,110 @@ class AFMViewEncoder(nn.Module):
 
 class OAAv2DepthAFM(OAAv2Depth):
     """OAAv2Depth with the coarse per-observation encoder swapped for a pretrained AFM.
-    Everything downstream of the encoder is inherited unchanged."""
-    def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", afm_input_norm="std", **kw):
+    Everything downstream of the encoder is inherited unchanged, except for two optional and
+    zero-initialised additions (both default OFF, so the released behaviour is bit-identical):
+
+    mic_diff -- mic-differential SSLAM (experiment B). Token indexing is identical across mics (same
+        patch grid, and no pose/yaw/ear ever reaches the AFM), so S_i - mean_j S_j is the mic-to-mic
+        difference at the SAME time-frequency patch. We inject only that difference back as a residual:
+          "res"      Z_i = S_i + alpha * P(D_i)                      alpha learnable, P zero-init
+          "gate"     Z_i = S_i + g_i (*) P(D_i)                      channel-wise gate from pooled
+                                                                     [S_i ; D_i ; pose_emb_i]
+          "gate_ctx" as "gate", and additionally the common component mean_j S_j is handed to the
+                     decoder ONCE as a global FiLM conditioning instead of being repeated per mic.
+        The gate bias starts at -2 (sigmoid ~ 0.12) and P is zero-init, so training begins from the
+        unmodified pretrained representation. Per-mic gate means are stashed in `last_gate` for eval.
+
+    fine_res -- lightweight fine-CNN residual into the coarse stream (experiment C). The existing fine
+        path currently reaches the network only once, at the decoder, and `_fine_lift` collapses the mic
+        axis with a plain mean -- near-field per-mic precision is diluted there. This adds NO new
+        encoder: it pools the already-computed fine tokens of each observation to the coarse token grid
+        and adds a zero-init projection of them to that observation's coarse tokens.
+    """
+    def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", afm_input_norm="std",
+                 mic_diff="none", fine_res=False, **kw):
         super().__init__(**kw)
         assert audio_backbone in _SPECS, f"bad audio_backbone {audio_backbone}"
+        assert mic_diff in ("none", "res", "gate", "gate_ctx"), f"bad mic_diff {mic_diff}"
         self.audio_backbone = audio_backbone
+        self.mic_diff, self.fine_res_on = mic_diff, bool(fine_res)
+        self.last_gate = None
         self.enc = AFMViewEncoder(audio_backbone, C=self.C, in_ch=self.in_ch, lh=self.lh, lw=self.lw,
                                   enc_res=self.enc_res, stem_stride1=kw.get("stem_stride1", False),
                                   pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm)
+        if mic_diff != "none":
+            self.diff_proj = nn.Linear(self.C, self.C)
+            nn.init.zeros_(self.diff_proj.weight); nn.init.zeros_(self.diff_proj.bias)
+            if mic_diff == "res":
+                self.diff_alpha = nn.Parameter(torch.tensor(0.1))
+            else:
+                self.gate_mlp = nn.Sequential(nn.Linear(3 * self.C, self.C), nn.GELU(),
+                                              nn.Linear(self.C, self.C))
+                nn.init.zeros_(self.gate_mlp[-1].weight)
+                nn.init.constant_(self.gate_mlp[-1].bias, -2.0)            # sigmoid(-2) ~ 0.12
+            if mic_diff == "gate_ctx":
+                self.ctx_film = nn.Linear(self.C, 2 * self.C)
+                nn.init.zeros_(self.ctx_film.weight); nn.init.zeros_(self.ctx_film.bias)
+        if self.fine_res_on:
+            self.fine_res = nn.Linear(self.enc.fine_ch, self.C)
+            nn.init.zeros_(self.fine_res.weight); nn.init.zeros_(self.fine_res.bias)
         # fine_in built by super() from the full ViewEncoder's fine_ch; the truncated fine path keeps
         # the same channel count by construction — assert instead of trusting it silently.
         assert self.fine_in.in_features == self.enc.fine_ch, \
             f"fine_ch mismatch {self.fine_in.in_features} vs {self.enc.fine_ch}"
+
+    # ---------------------------------------------------------------- experiments B / C
+    def _encode(self, spec, view_pose=None):
+        """OAAv2Depth._encode with the mic-differential (B) and fine-residual (C) injections inserted
+        between the encoder and the positional/pose additions. With both off this is the parent verbatim."""
+        assert view_pose is None or len(view_pose) == self.nv, f"view_pose len must be {self.nv}"
+        assert spec.size(1) == self.nv * self.in_ch, f"expected {self.nv * self.in_ch}ch, got {spec.size(1)}"
+        B = spec.size(0); dev = spec.device; H, W = spec.shape[-2:]
+        pose_feat, poses = self._pose_tensors(dev, view_pose)
+        v = spec.view(B, self.nv, self.in_ch, H, W).reshape(B * self.nv, self.in_ch, H, W)
+        enc_t, fine_t = self.enc(v)
+        t = enc_t.reshape(B, self.nv, self.M, self.C)
+        fine = fine_t.reshape(B, self.nv, 4 * self.M, self.enc.fine_ch)
+        self.ctx = None
+
+        if self.mic_diff != "none":                                        # --- experiment B
+            Sbar = t.mean(1, keepdim=True)                                 # (B,1,M,C) common room/reverb
+            D = t - Sbar                                                   # (B,nv,M,C) mic-specific
+            dproj = self.diff_proj(D)
+            if self.mic_diff == "res":
+                t = t + self.diff_alpha * dproj
+            else:
+                e = self.pose_emb(pose_feat).view(1, self.nv, self.C).expand(B, -1, -1)
+                g = torch.sigmoid(self.gate_mlp(torch.cat([t.mean(2), D.mean(2), e], -1)))   # (B,nv,C)
+                t = t + g.unsqueeze(2) * dproj
+                self.last_gate = g.detach().mean(-1)                       # (B,nv) for eval-time analysis
+            if self.mic_diff == "gate_ctx":
+                self.ctx = Sbar.squeeze(1).mean(1)                         # (B,C) single global context
+
+        if self.fine_res_on:                                               # --- experiment C
+            f = fine.view(B, self.nv, 2 * self.lh, 2 * self.lw, self.enc.fine_ch)
+            f = f.view(B, self.nv, self.lh, 2, self.lw, 2, self.enc.fine_ch).mean((3, 5))    # 2x2 pool
+            t = t + self.fine_res(f.reshape(B, self.nv, self.M, self.enc.fine_ch))
+
+        if not self.no_tf_pe:
+            t = t + self.tf_pe.unsqueeze(1)
+        if not self.no_pose_emb:
+            t = t + self.pose_emb(pose_feat).view(1, self.nv, 1, self.C)
+        return t, poses, pose_feat, fine
+
+    def _decode(self, x_tok, fine_tok, poses):
+        """Parent decoder, with the B3 global context applied as a zero-init FiLM on the decoder input."""
+        if getattr(self, "ctx", None) is None:
+            return super()._decode(x_tok, fine_tok, poses)
+        B = x_tok.size(0); dev = x_tok.device
+        x = x_tok.transpose(1, 2).reshape(B, self.C, self.lh, self.lw)
+        gamma, beta = self.ctx_film(self.ctx).chunk(2, -1)
+        x = x * (1.0 + gamma[:, :, None, None]) + beta[:, :, None, None]
+        fine_erp = self._fine_lift(fine_tok, poses, dev)
+        x = self.up_stages[0](x) + self.fine_to_dec(fine_erp)
+        for st in self.up_stages[1:]:
+            x = st(x)
+        return torch.sigmoid(self.head(x))
 
     def afm_pretrained_param_names(self):
         return self.enc.afm.pretrained_param_names(prefix="enc.afm.")
@@ -356,7 +518,8 @@ def build_afm_model(args_dict, pretrained=True):
         stem_stride1=a.get("stem_stride1", False) or False, max_depth=a.get("max_depth", 10.0),
         no_pose_emb=a.get("no_pose_emb", False) or False, no_ray_emb=a.get("no_ray_emb", False) or False,
         no_geo_bias=a.get("no_geo_bias", False) or False, no_tf_pe=a.get("no_tf_pe", False) or False,
-        no_cross=a.get("no_cross", False) or False)
+        no_cross=a.get("no_cross", False) or False,
+        mic_diff=a.get("mic_diff", "none") or "none", fine_res=a.get("fine_res", False) or False)
 
 
 def make_param_groups(model, base_lr, afm_lr_ratio=0.1, wd=1e-4, llrd=0.0):
