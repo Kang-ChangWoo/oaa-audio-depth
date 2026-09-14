@@ -44,6 +44,7 @@ import torch.nn.functional as F
 
 from model.oaa import OAAv2Depth, ViewEncoder, LH, LW
 
+_SR = 48000          # both datasets render at 48 kHz (data_0422.py / data_mp3d.py SR)
 AFM_DIR = os.environ.get("AFM_WEIGHTS", "/root/local1/changwoo/_afm_weights")
 BACKBONES = ("cnn", "audiomosaic", "bat", "eat", "sslam", "m2d", "m2d_plain", "m2d20ms")
 
@@ -54,13 +55,16 @@ _SPECS = {
                         cls_key="cls_token", pre_norm_key="norm_pre", final_norm_key=None, cls_gets_pos=True),
     "bat": dict(hf="lrauch/BAT-vit-b16-pretrainedAS2M", prefix="", style="postnorm_gate",
                 grid=(64, 8), layout="tf", pos_key="pos_embed", pos_has_cls=False,
-                cls_key="cls_token", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False),
+                cls_key="cls_token", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False,
+                patch_key="patch_embed.proj"),
     "eat": dict(hf="worstchan/EAT-base_epoch30_pretrain", prefix="model.", style="postnorm_alt",
                 grid=(64, 8), layout="tf", pos_key="fixed_positional_encoder.positions", pos_has_cls=False,
-                cls_key="extra_tokens", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False),
+                cls_key="extra_tokens", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False,
+                patch_key="local_encoder.proj"),
     "sslam": dict(hf="ta012/SSLAM_pretrain", prefix="model.", style="postnorm_alt",
                   grid=(64, 8), layout="tf", pos_key="fixed_positional_encoder.positions", pos_has_cls=False,
-                  cls_key="extra_tokens", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False),
+                  cls_key="extra_tokens", pre_norm_key="pre_norm", final_norm_key=None, cls_gets_pos=False,
+                patch_key="local_encoder.proj"),
     "m2d": dict(pth="m2d/m2d_clap_vit_base-80x1001p16x16p16kpBpTI-2025/checkpoint-30.pth",
                 prefix="backbone.", style="prenorm", grid=(5, 62), layout="ft", pos_key="pos_embed",
                 pos_has_cls=True, cls_key="cls_token", pre_norm_key=None, final_norm_key="norm", cls_gets_pos=True),
@@ -226,7 +230,28 @@ def _plain_conv_stem(dim):
     return nn.Sequential(*layers[:-1])
 
 
-_STEMS = {"linear": None, "conv": _plain_conv_stem, "conv_res": _ResTempStem,
+def _mel_fb(n_mels, n_freq, sr, fmax=None):
+    """HTK triangular mel filterbank (n_mels, n_freq) over the linear STFT bins we already cache.
+
+    The AFM checkpoints were pretrained on log-MEL patches, so feeding them linear-frequency bins
+    puts the pretrained patch embedding out of distribution before a single block runs. This is the
+    filterbank that puts the input back in the format the pretrained weights expect."""
+    fmax = fmax or sr / 2
+    m = lambda f: 2595.0 * math.log10(1.0 + f / 700.0)
+    mi = lambda x: 700.0 * (10.0 ** (x / 2595.0) - 1.0)
+    pts = torch.tensor([mi(v) for v in torch.linspace(m(0.0), m(fmax), n_mels + 2).tolist()])
+    bins = pts / (sr / 2) * (n_freq - 1)
+    fb = torch.zeros(n_mels, n_freq)
+    idx = torch.arange(n_freq, dtype=torch.float32)
+    for i in range(n_mels):
+        lo, ctr, hi = bins[i], bins[i + 1], bins[i + 2]
+        up = (idx - lo) / max(float(ctr - lo), 1e-6)
+        dn = (hi - idx) / max(float(hi - ctr), 1e-6)
+        fb[i] = torch.clamp(torch.minimum(up, dn), min=0.0)
+    return fb / fb.sum(1, keepdim=True).clamp(min=1e-6)
+
+
+_STEMS = {"linear": None, "native": None, "conv": _plain_conv_stem, "conv_res": _ResTempStem,
           "conv_ms": _MultiScaleStem, "conv_fact": _FactorizedStem}
 
 
@@ -248,15 +273,29 @@ class AFMBackbone(nn.Module):
         s = _SPECS[name]
         self.name, self.lh, self.lw, self.stem_kind = name, lh, lw, stem
         self.cls_gets_pos = s["cls_gets_pos"]
-        ph, pw = s.get("patch", (256 // lh, 512 // lw))                   # default 16x16 on the 256x512 spec
-        self.grid_hw = (256 // ph, 512 // pw)                             # token grid (freq rows, time cols)
-        M = self.grid_hw[0] * self.grid_hw[1]
-        assert M == lh * lw, f"patch {ph}x{pw} gives {M} tokens, OAA needs {lh * lw}"
-        if stem != "linear":
-            assert (ph, pw) == (16, 16), "conv stems only support the 16x16 grid"
-            self.patch = _STEMS[stem](self.DIM)
+        if stem == "native":
+            # Feed the backbone its OWN input format: a log-mel image at the pretrained patch grid,
+            # so the pretrained patch embedding AND positional embedding transfer verbatim (no
+            # interpolation, no from-scratch input layer). Requires the native grid to hold exactly
+            # lh*lw tokens, which is true for the 1024x128 AudioSet backbones (64x8 = 512).
+            assert s.get("patch_key"), f"{name} has no pretrained patch embed to reuse"
+            assert s["grid"][0] * s["grid"][1] == lh * lw, \
+                f"{name} native grid {s['grid']} != {lh * lw} tokens"
+            self.grid_hw = s["grid"]                                      # (rows, cols) in NATIVE layout
+            self.native_img = (16 * s["grid"][0], 16 * s["grid"][1])      # e.g. (1024 time, 128 freq)
+            self.patch = nn.Conv2d(1, self.DIM, 16, 16)                   # pretrained (see _load_pretrained)
+            n_mels = s["grid"][1] * 16 if s["layout"] == "tf" else s["grid"][0] * 16
+            self.register_buffer("mel_fb", _mel_fb(n_mels, 256, _SR), persistent=False)
         else:
-            self.patch = nn.Conv2d(1, self.DIM, (ph, pw), (ph, pw))       # NEW (task-specific, base LR)
+            ph, pw = s.get("patch", (256 // lh, 512 // lw))               # default 16x16 on the 256x512 spec
+            self.grid_hw = (256 // ph, 512 // pw)                         # token grid (freq rows, time cols)
+            M = self.grid_hw[0] * self.grid_hw[1]
+            assert M == lh * lw, f"patch {ph}x{pw} gives {M} tokens, OAA needs {lh * lw}"
+            if stem != "linear":
+                assert (ph, pw) == (16, 16), "conv stems only support the 16x16 grid"
+                self.patch = _STEMS[stem](self.DIM)
+            else:
+                self.patch = nn.Conv2d(1, self.DIM, (ph, pw), (ph, pw))   # NEW (task-specific, base LR)
         self.pos_embed = nn.Parameter(torch.zeros(1, lh * lw, self.DIM))  # pretrained (interpolated)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.DIM))        # pretrained
         self.pre_norm = nn.LayerNorm(self.DIM, eps=1e-6) if s["pre_norm_key"] else None
@@ -310,7 +349,12 @@ class AFMBackbone(nn.Module):
         n_native = s["grid"][0] * s["grid"][1]
         pos = pos[:n_native]                                              # EAT/SSLAM store 768x8; use first 64x8
         assert pos.shape[0] == n_native, f"pos len {pos.shape[0]} != grid {s['grid']}"
-        self.pos_embed.data.copy_(_interp_pos(pos, s["grid"], s["layout"], *self.grid_hw))
+        if self.stem_kind == "native":
+            self.pos_embed.data.copy_(pos.reshape(1, -1, self.DIM))       # native grid: verbatim, no interp
+            self.patch.weight.data.copy_(take(f"{s['patch_key']}.weight").reshape(self.DIM, 1, 16, 16))
+            self.patch.bias.data.copy_(take(f"{s['patch_key']}.bias"))
+        else:
+            self.pos_embed.data.copy_(_interp_pos(pos, s["grid"], s["layout"], *self.grid_hw))
         if cls_pos is not None and s["cls_gets_pos"]:
             self.cls_pos_buf.copy_(cls_pos.reshape(1, 1, self.DIM))
         self.checkpoint_id = ident
@@ -321,7 +365,8 @@ class AFMBackbone(nn.Module):
                   f"[afm]   pretrained loaded: YES ({len(used)} tensors; {len(unused)} source tensors unused, "
                   f"e.g. {unused[:4]})\n"
                   f"[afm]   native grid {s['grid']} ({s['layout']}) -> target token grid (freq {self.grid_hw[0]} x time {self.grid_hw[1]}); "
-                  f"style={s['style']}; new params: patch-embed, proj"
+                  f"style={s['style']}; new params: "
+                  f"{'proj' if self.stem_kind == 'native' else 'patch-embed, proj'}"
                   f"{'' if s['final_norm_key'] else ', out-norm'}", flush=True)
 
     # ---- forward -------------------------------------------------------------
@@ -339,6 +384,13 @@ class AFMBackbone(nn.Module):
             mu = x.mean(dim=(1, 2, 3), keepdim=True)
             sd = x.std(dim=(1, 2, 3), keepdim=True).clamp(min=1e-4)        # zeroed (vdrop) inputs stay finite
             x = (x - mu) / sd
+        if self.stem_kind == "native":
+            # (B,1,256 freq,512 time) -> log-mel -> the backbone's own (time, freq) image
+            x = torch.einsum("mf,bcft->bcmt", self.mel_fb.to(x.dtype), x)  # freq 256 -> n_mels
+            x = x.transpose(-2, -1)                                        # -> (B,1,time,mel)
+            if _SPECS[self.name]["layout"] != "tf":
+                x = x.transpose(-2, -1)
+            x = F.interpolate(x, size=self.native_img, mode="bilinear", align_corners=False)
         t = self.patch(x).flatten(2).transpose(1, 2)                       # (B*, lh*lw, 768) freq-major
         t = t + self.pos_embed
         cls = self.cls_token + self.cls_pos_buf
@@ -360,6 +412,8 @@ class AFMBackbone(nn.Module):
             names += [f"{prefix}pre_norm.weight", f"{prefix}pre_norm.bias"]
         if s["final_norm_key"]:
             names += [f"{prefix}out_norm.weight", f"{prefix}out_norm.bias"]
+        if self.stem_kind == "native":                 # the patch embed is pretrained too in this mode
+            names += [f"{prefix}patch.weight", f"{prefix}patch.bias"]
         return set(names)
 
 

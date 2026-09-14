@@ -21,7 +21,13 @@ MAX_DEPTH = 10.0
 WINDOW = 2823   # MP3D legacy convention (340 m/s round-trip @10 m) — 2026-07-24: MP3D and Replica keep
 #               # their own dataset-specific windows (Replica: 343 m/s = 2799). Matches cached checkpoints.
 H, W = 256, 512
-N_FFT, WIN, HOP = 512, 400, 160
+# STFT hop is env-overridable (STFT_HOP) for the input-resolution study: the released recipe
+# (hop 160 = 3.33 ms @ 48 kHz) yields only ~18 real frames over the 59 ms clip, which the cache then
+# nearest-upsamples to 512 columns -- a 28x replicated time axis. A smaller hop puts real information
+# on the axis that encodes distance. Any value other than the default disables the pre-built spec
+# cache (it was rendered at hop 160) and is recorded in the checkpoint args so eval can refuse a
+# mismatch. Frequency content is untouched: only the sampling of the time axis changes.
+N_FFT, WIN, HOP = 512, 400, int(os.environ.get("STFT_HOP", 160))
 
 _OFFS = {"r2": (0,), "fb": (0, 2), "fs": (0, 1), "r6": (0, 1, 3), "r8": (0, 1, 2, 3)}  # group-relative yaw slots (L,R each)
 # Channel-level specs (mirror of data_0422): (yaw-slot, ear) with ear 0=L, 1=R. cb = the MP3D
@@ -94,7 +100,7 @@ def _load_wave(scene, front, mode, frames=WINDOW):
     return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
-_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "")   # output of tools/build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
+_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "") if HOP == 160 else ""   # output of tools/build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
 
 
 def _spec1(scene, step):

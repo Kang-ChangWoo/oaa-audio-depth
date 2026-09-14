@@ -48,7 +48,7 @@ def main():
     p.add_argument("--afm-random-init", action="store_true")    # Stage-2 ablation: same arch, no pretrained init
     # patch stem (A): conv = released 4x stride-2 3x3; conv_res/conv_ms/conv_fact = echo-specific variants
     p.add_argument("--afm-stem", default="linear",
-                   choices=["linear", "conv", "conv_res", "conv_ms", "conv_fact"])
+                   choices=["linear", "native", "conv", "conv_res", "conv_ms", "conv_fact"])
     # (B) mic-differential residual on the AFM tokens: D_i = S_i - mean_j S_j, injected zero-init
     p.add_argument("--mic-diff", default="none", choices=["none", "res", "gate", "gate_ctx"])
     # (C) zero-init residual from the EXISTING fine CNN tokens into the coarse stream
@@ -84,6 +84,7 @@ def main():
     # ckpt-args compatibility (core.ckpt.build / eval.py read these)
     a.full_res = a.full_res_enc = a.multi_scale_lift = a.dec_deep = a.rounds_wired = True; a.cond_mode = "adaln"
     a.data_module = os.environ.get("DATA_MODULE", "data_mp3d")
+    a.stft_hop = getattr(_DM, "HOP", 160)      # input-resolution study: recorded so eval can refuse a mismatch
     torch.manual_seed(a.seed); np.random.seed(a.seed); random.seed(a.seed)
     device = torch.device("cuda")
     rd = os.path.join(a.out_dir, a.run_name); os.makedirs(rd, exist_ok=True)
