@@ -46,14 +46,9 @@ R8MP="--nviews 8 --data-mode r8 --epochs 30 --batch-size 4 --accum 1 --stem-stri
 
 #  name | data module | STFT hop | trainer args
 JOBS=(
-# --- Test 1: native input format, released preprocessing (hop 160)
-"0820_sslnat_fb_rep|data_0422|160|$SL --afm-stem native $FBREP"
-"0820_sslnat_fb_mp3d|data_mp3d|160|$SL --afm-stem native $FBMP"
-"0820_sslnat_r2_rep|data_0422|160|$SL --afm-stem native $R2REP"
-"0820_sslnat_r8_mp3d|data_mp3d|160|$SL --afm-stem native $R8MP"
-
-# --- Test 2: real time resolution (hop 44 = 64 real frames). CNN control first: if the CNN gains
-#     as much as the AFM, the win belongs to the input recipe and not to the pretrained encoder.
+# --- Test 2 first: hop 44 puts real information on the distance axis, and it is the arm where the
+#     native layout can actually pay off (64 real frames = 64 native time tokens, 1:1).
+#     CNN control leads: if the CNN gains as much, the win is the input recipe, not the encoder.
 "0820_h44_cnn_fb_rep|data_0422|44|$CN $FBREP"
 "0820_h44_cnn_fb_mp3d|data_mp3d|44|$CN $FBMP"
 "0820_h44_sslcs_fb_rep|data_0422|44|$SL --afm-stem conv $FBREP"
@@ -61,6 +56,15 @@ JOBS=(
 # --- Test 1 + 2 together: the configuration both defects argue for
 "0820_h44_sslnat_fb_rep|data_0422|44|$SL --afm-stem native $FBREP"
 "0820_h44_sslnat_fb_mp3d|data_mp3d|44|$SL --afm-stem native $FBMP"
+# --- Test 1 alone, at the released hop. This is the WEAKEST cell for the native layout: at hop 160
+#     only ~18 real frames exist, so 64 native time tokens are 3.5x oversampled where the current 32
+#     are 1.8x -- the layout fixes the transfer while making the time-axis waste worse. It is carried
+#     only as the hop-160 corner of the 2x2 (native on/off x hop 44/160), which is what separates
+#     "the pretrained interface transfers" from "the time axis was empty". The two unpaired
+#     native@160 cells (Rep r2, MP3D r8) were dropped: with no hop-44 partner a result there could
+#     not be attributed to either factor.
+"0820_sslnat_fb_rep|data_0422|160|$SL --afm-stem native $FBREP"
+"0820_sslnat_fb_mp3d|data_mp3d|160|$SL --afm-stem native $FBMP"
 )
 
 i=0
