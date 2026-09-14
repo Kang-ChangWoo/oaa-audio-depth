@@ -424,7 +424,7 @@ class OAAv2DepthAFM(OAAv2Depth):
         assert mic_diff in ("none", "res", "gate", "gate_ctx"), f"bad mic_diff {mic_diff}"
         self.audio_backbone = audio_backbone
         self.mic_diff, self.fine_res_on = mic_diff, bool(fine_res)
-        self.last_gate = None
+        self.last_gate = None; self.last_gate_fine = None
         self.enc = AFMViewEncoder(audio_backbone, C=self.C, in_ch=self.in_ch, lh=self.lh, lw=self.lw,
                                   enc_res=self.enc_res, stem_stride1=kw.get("stem_stride1", False),
                                   pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm)
@@ -444,6 +444,10 @@ class OAAv2DepthAFM(OAAv2Depth):
         if self.fine_res_on:
             self.fine_res = nn.Linear(self.enc.fine_ch, self.C)
             nn.init.zeros_(self.fine_res.weight); nn.init.zeros_(self.fine_res.bias)
+            self.fine_gate = nn.Sequential(nn.Linear(3 * self.C, self.C), nn.GELU(),
+                                           nn.Linear(self.C, self.C))      # channel-wise g_L
+            nn.init.zeros_(self.fine_gate[-1].weight)
+            nn.init.constant_(self.fine_gate[-1].bias, -2.0)               # sigmoid(-2) ~ 0.12
         # fine_in built by super() from the full ViewEncoder's fine_ch; the truncated fine path keeps
         # the same channel count by construction — assert instead of trusting it silently.
         assert self.fine_in.in_features == self.enc.fine_ch, \
@@ -480,7 +484,11 @@ class OAAv2DepthAFM(OAAv2Depth):
         if self.fine_res_on:                                               # --- experiment C
             f = fine.view(B, self.nv, 2 * self.lh, 2 * self.lw, self.enc.fine_ch)
             f = f.view(B, self.nv, self.lh, 2, self.lw, 2, self.enc.fine_ch).mean((3, 5))    # 2x2 pool
-            t = t + self.fine_res(f.reshape(B, self.nv, self.M, self.enc.fine_ch))
+            Lp = self.fine_res(f.reshape(B, self.nv, self.M, self.enc.fine_ch))              # (B,nv,M,C)
+            e = self.pose_emb(pose_feat).view(1, self.nv, self.C).expand(B, -1, -1)
+            gl = torch.sigmoid(self.fine_gate(torch.cat([t.mean(2), Lp.mean(2), e], -1)))    # (B,nv,C)
+            t = t + gl.unsqueeze(2) * Lp
+            self.last_gate_fine = gl.detach().mean(-1)                     # (B,nv) for eval-time analysis
 
         if not self.no_tf_pe:
             t = t + self.tf_pe.unsqueeze(1)
