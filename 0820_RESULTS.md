@@ -540,3 +540,53 @@ CNN 1.5890 while near 0.1327 loses to 0.1250.
 **E. MP3D r8 sslam failure confirmed on a third seed.** sslam+LLRD s1 0.9751 (s0 0.9861, plain
   sslam 0.9782). Three runs, two recipes, two seeds -> systematic, as retracted-and-restated on
   09-11.
+
+---
+
+## Common-mode collapse diagnostic (2026-09-14) — `analysis/diff_stats.py`
+
+For per-observation AFM tokens S_i (identical token indexing across mics; the AFM never sees pose):
+`dratio = ||S_i - mean_j S_j|| / ||S_i||` (mic-specific share) and `cos` = mean pairwise cos(S_i, S_j)
+(1.0 = the observations are indistinguishable to the backbone). Read-only forward pass, eval
+pipeline untouched. Figure: `0820_report/figs/fig12_commonmode.png`.
+
+| dataset | run | stem | test MAE | 8mic dratio/cos | 6mic | 4mic | 2mic |
+|---|---|---|---|---|---|---|---|
+| MP3D | eatllrd_cs_r8 | conv | 0.7373 | 0.419/0.796 | 0.527/0.667 | 0.548/0.652 | 0.383/0.769 |
+| MP3D | sslamllrd_cs_r6 | conv | 0.7473 | — | 0.431/0.768 | 0.835/0.111 | 0.767/0.192 |
+| MP3D | sslamllrd_cs_r8 | conv | 0.9723 | 0.429/0.778 | 0.641/0.504 | 0.700/0.442 | 0.500/0.615 |
+| MP3D | sslam_r8 | linear | 0.9782 | 0.001/1.000 | 0.007/1.000 | 0.010/1.000 | 0.007/1.000 |
+| MP3D | eatllrd_r8 | linear | 0.9858 | 0.002/1.000 | 0.003/1.000 | 0.003/1.000 | 0.001/1.000 |
+| MP3D | sslam_llrd_r8 | linear | 0.9861 | 0.285/0.890 | 0.489/0.714 | 0.551/0.669 | 0.394/0.769 |
+| Replica | eatllrd_cs_r8 | conv | 0.2291 | 0.475/0.724 | 0.658/0.484 | 0.718/0.445 | 0.510/0.622 |
+| Replica | sslam_r8 | linear | 0.2399 | 0.475/0.731 | 0.625/0.566 | 0.638/0.552 | 0.446/0.700 |
+| Replica | sslamllrd_cs_r8 | conv | 0.2402 | 0.459/0.746 | 0.626/0.525 | 0.675/0.489 | 0.478/0.652 |
+
+**MP3D 8ch has two distinct failure modes, and they need different fixes.**
+
+1. *Encoder common-mode collapse.* `sslam_r8` and `eatllrd_r8` (linear patch embed) emit the SAME
+   token map for all eight observations to four decimals (cos = 1.0000, dratio ~0.002): the encoder
+   output is effectively input-independent, and stays so when six of the eight channels are zeroed.
+   This is dataset-specific, not stem-specific in general — Replica's `sslam_r8` uses the same
+   linear stem and is healthy (0.475/0.731). ConvStem removes it: `sslamllrd_cs_r8_mp3d` goes
+   cos 1.000 -> 0.778.
+2. *Alive encoder, unusable downstream.* Fixing (1) does not fix the MAE. `sslamllrd_cs_r8_mp3d`
+   is statistically indistinguishable from the only MP3D 8ch success (`eatllrd_cs_r8`, 0.419/0.796)
+   and from healthy Replica runs, yet scores 0.9723 against that run's 0.7373. `sslam_llrd_r8`
+   (0.285/0.890) is the same story with a partially recovered encoder.
+
+So MP3D 8ch is a FUSION failure, not an encoder failure: per-mic structure demonstrably exists
+(dratio 0.43) and is lost when the eight observations are combined. This retires the earlier
+expectation that ConvStem would clear the MP3D 8ch collapse, and makes the mic-differential
+residual (experiment B) the primary treatment for that cell rather than a hedge.
+
+### Cell verdict, sslam + LLRD + convstem (all n=1, strict +-0.01 tie rule)
+
+| | Rep r2 | Rep fb | Rep r6 | Rep r8 | MP3D r2 | MP3D fb | MP3D r6 | MP3D r8 |
+|---|---|---|---|---|---|---|---|---|
+| OAA-CNN | 0.2894 | 0.2596 | 0.2384 | 0.2368 | 0.9084 | 0.7849 | 0.7502 | 0.7467 |
+| sslam+LLRD+cs | 0.2670 | 0.2560 | 0.2378 | 0.2402 | 0.8888 | 0.7744 | 0.7473 | 0.9723 |
+| verdict | win | tie | tie | tie | win | win | tie | **loss** |
+
+3 wins / 4 ties / 1 loss. The single loss is the MP3D 8ch cell above. `eat+LLRD+cs` scores 0.7373
+there (tie vs CNN, gap 0.0094), so the cell is reachable — just not by sslam as currently fused.
