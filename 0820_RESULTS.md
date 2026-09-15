@@ -590,3 +590,93 @@ residual (experiment B) the primary treatment for that cell rather than a hedge.
 
 3 wins / 4 ties / 1 loss. The single loss is the MP3D 8ch cell above. `eat+LLRD+cs` scores 0.7373
 there (tie vs CNN, gap 0.0094), so the cell is reachable — just not by sslam as currently fused.
+
+---
+
+## Input-side study (2026-09-15) — the time axis was the bottleneck, and it is shared
+
+Two defects in how the echo reaches the encoder (see the commit for the full argument):
+
+1. the pretrained patch embedding shipped in the AFM checkpoints (`local_encoder.proj`) was
+   discarded and a fresh one trained, with the positional embedding bicubic-interpolated off its
+   native (64 time, 8 freq) grid. `--afm-stem native` re-lays the spectrogram out as the backbone's
+   own 1024x128 log-mel image so both transfer verbatim (AFM transfer 97.3% -> 99.8%).
+2. the true STFT of the 58.8 ms clip at hop 160 is 257 freq x 18 time; the cache nearest-upsamples
+   that to 256x512, so the axis that encodes DISTANCE is 28x replicated and each 16-wide patch
+   column spans 0.56 real frames. `STFT_HOP=44` gives exactly 64 real frames, one per native time
+   token, with N_FFT and the window unchanged.
+
+Because (2) is a preprocessing change the CNN baseline was retrained on it as well.
+
+### Replica 4ch (fb), test
+
+| model | hop | MAE | RMSE | AbsRel | d1 | near<3 | mid3-6 | far>6 | params |
+|---|---|---|---|---|---|---|---|---|---|
+| OAA-CNN (`oaa_fb_fin`) | 160 | 0.2596 | 0.5143 | 0.1404 | 0.8263 | 0.1354 | 0.7581 | 1.5200 | 15M |
+| sslam+LLRD+cs | 160 | 0.2560 | 0.5131 | 0.1355 | 0.8264 | 0.1327 | 0.7994 | 1.4289 | 101M |
+| sslam+LLRD+cs s1 | 160 | 0.2585 | 0.5160 | 0.1405 | 0.8211 | 0.1391 | 0.7668 | 1.4360 | 101M |
+| **OAA-CNN** | **44** | **0.2496** | 0.5073 | 0.1334 | 0.8364 | **0.1293** | 0.7276 | 1.5936 | 15M |
+| **sslam+LLRD+cs** | **44** | **0.2496** | **0.5016** | **0.1314** | 0.8340 | 0.1313 | 0.7627 | **1.4107** | 101M |
+| **sslam+native** | **44** | **0.2474** | 0.5053 | 0.1325 | **0.8393** | 0.1321 | **0.7148** | 1.5668 | 101M |
+
+**The single largest improvement in this campaign is a preprocessing change, and it is not an
+encoder result.** Hop 160 -> 44 moves the CNN by -0.0100 and the AFM by -0.0077 (2-seed mean
+0.2573), with zero added parameters and no architecture change. Both land on 0.2496, so the
+CNN-AFM gap closes from 0.0023 to 0.0000. For scale: the best AFM variant per cell beats the CNN by
+2.7% relative on average across the eight hop-160 cells; this one line of preprocessing is worth
+3.9% relative on the CNN alone. Running the CNN control was what made this readable -- without it
+the same numbers would have been reported as "the input fix makes the AFM a cell record".
+
+The native layout adds a further -0.0022 (0.2474, cell record, best delta1 and best mid-band of any
+row) but that is a TIE under the campaign rule, on a single seed. Direction only.
+
+Note the band structure: at hop 44 the CNN still owns near-field (0.1293) and the conv-stem AFM
+still owns far-field (1.4107, -11% vs CNN) -- the near/far trade survives the input change. native
+is a third character again: it trades far (1.5668) for mid (0.7148), consistent with its token grid
+moving from (16 freq, 32 time) to (8 freq, 64 time) -- half the frequency resolution, double the
+time resolution.
+
+MP3D 4ch is still training (`h44_cnn_fb_mp3d` ep18, `h44_sslcs_fb_mp3d` ep7, `h44_sslnat_fb_mp3d`
+ep3); whether the gain divides the same way on the harder dataset is open.
+
+## Fusion variants on the MP3D 8ch loss cell (val, in progress)
+
+| variant | best val | note |
+|---|---|---|
+| A0 conv stem | 1.1002 | 30 ep, flat from ep2 |
+| A1 conv_res | 1.1044 | cancelled at ep8 |
+| A2 conv_ms | 1.0896 | ep22, same wall |
+| B3 gate + S-bar FiLM | 1.0942 | ep13, mechanism dead |
+| B2 gated differential | **0.8346** | ep9 best, then **collapsed to 1.19 at ep14** |
+| C3 Model 3 (gate + fine residual) | **0.8868** | ep13, still descending, past B2's collapse epoch |
+
+Three readings. (a) The stem axis is walled off on this cell: three variants all sit at A0.
+(b) The gated differential does break the wall, but the solution it finds is UNSTABLE -- B2 fell
+back into the collapse basin at ep14, which is what one expects if the averaging shortcut is a
+strong attractor at eight observations. (c) Adding the common component to the decoder as a global
+FiLM (B3) KILLS the mechanism: same gate as B2, 0.8346 -> 1.0942. Handing S-bar to the decoder
+separately removes the differential path's reason to work.
+
+### Rejected: the rear-microphone hypothesis
+
+r6 and r8 differ only by the 180 deg pair, so the natural guess was that the rear observation is
+actively harmful on MP3D's open floorplans. `analysis/chanset.py` refutes it: zeroing 180L+180R
+makes the failing model WORSE (+0.1237), by the same amount as zeroing 90 (+0.1261) or 270
+(+0.1442), and the successful eat+LLRD+cs behaves identically (+0.1308 / +0.1360 / +0.1308). Every
+observation contributes; no microphone subset explains the cell.
+
+### Beyond-Image-to-Depth (ITD family, 318M) — all 16 cells complete
+
+| test MAE | 2ch | 4ch | 6ch | 8ch |
+|---|---|---|---|---|
+| Replica OAA-CNN | 0.2894 | 0.2596 | 0.2384 | 0.2368 |
+| Replica Beyond-I2D | 0.3150 | 0.3125 | 0.2982 | 0.2981 |
+| MP3D OAA-CNN | 0.9084 | 0.7849 | 0.7502 | 0.7467 |
+| MP3D Beyond-I2D | 0.9932 | 0.8550 | 0.8541 | 0.8712 |
+
+Loses all eight cells on both datasets, and the gap widens monotonically with observation count
+(Replica +0.026 -> +0.061, MP3D +0.070 -> +0.125). It saturates at 6 mics and gets WORSE at 8
+(MP3D 0.8541 -> 0.8712; Replica 0.2982 -> 0.2981). Position-blind channel handling does not convert
+extra observations into geometry, and 318M of capacity does not substitute for pose conditioning.
+Worth noting that Beyond also degrades from 6 to 8 mics, the same direction as sslam's MP3D 8ch
+failure — so "integration breaks at eight observations" may not be specific to one architecture.
