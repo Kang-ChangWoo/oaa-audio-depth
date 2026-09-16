@@ -193,6 +193,28 @@ dl div{margin:4px 0}
 <div class="key"><b>STFT hop 하나를 바꾼 것이 이 캠페인의 어떤 인코더 개입보다 크다.</b> hop 160 → 44는 CNN을 −0.0100, AFM을 −0.0077 움직인다. 추가 파라미터 0개, 아키텍처 무변경이다. 규모 비교: 여덟 칸에서 칸마다 <i>가장 좋은</i> AFM 변형을 골라 붙여도 CNN 대비 평균 −2.7%인데, 이 전처리 한 줄은 <b>CNN 단독으로 −3.9%</b>다. 그리고 <b>공유 병목</b>이다 — 둘이 0.2496으로 같은 값에 착지해 CNN-AFM 격차가 0.0023에서 <b>0.0000</b>이 된다. 입력이 나빠서 파운데이션 모델이 힘을 못 쓴 것이 아니라, 입력이 나빠서 <b>둘 다</b> 못 쓴 것이었고, 고치면 둘 다 같이 올라갈 뿐 사전학습의 상대적 이점은 늘지 않는다. 이 판독을 가능하게 한 것은 CNN 대조군이다. 그것이 없었다면 같은 숫자가 "입력을 고치니 AFM이 셀 신기록"으로 보고됐을 것이다.</div>
 <p>2×2는 두 결함이 독립이 아니라 <b>한 쌍</b>임을 보여준다. native는 hop 160에서 0.2685로 conv stem보다 <b>0.0112 나쁘다</b>(규칙상 패). 사전학습 가중치를 100% 가져와도 그것만으로는 손해라는 뜻인데, 이유는 native가 시간 토큰을 32 → 64로 늘리는데 hop 160에는 실제 프레임이 18개뿐이어서 토큰당 실제 프레임이 0.56 → 0.28로 <b>낭비가 두 배</b>가 되기 때문이다. hop 44에서는 부호가 뒤집혀 0.2474로 conv stem을 앞서고(−0.0022, 규칙상 동률), hop 효과 자체도 conv의 −0.0077 대비 <b>−0.0211로 세 배</b>가 된다. <b>사전학습 인터페이스를 보존하는 것은 그 인터페이스가 전제하는 시간 해상도가 실제로 있을 때만 값을 한다.</b> 어느 한쪽만 실행했다면 정반대의 두 결론 중 하나에 도달했을 것이다.</p>
 <p>대역 구조는 입력을 바꿔도 살아남는다. hop 44에서도 근거리 1위는 CNN(0.1293), 원거리 1위는 conv stem AFM(1.4107, CNN 대비 −11%)이다. native는 제3의 성격으로 원거리를 내주고(1.5668) 중거리를 가져가는데(0.7148, 전 행 1위), 토큰 격자가 (16 freq, 32 time)에서 (8 freq, 64 time)으로 바뀌어 주파수 해상도를 절반 내주고 시간 해상도를 두 배 얻은 것과 방향이 일치한다.</p>
+<h3>단일 설정으로 여덟 칸을 덮을 수 있는가</h3>
+<p>§3의 스코어카드는 칸마다 가장 좋은 변형을 골라 읽은 것이다. 실제로 배포할 수 있는 것은 <b>하나의 고정 설정</b>이므로, 평가된 110개 런의 저장된 args를 backbone·stem·LLRD 조합으로 묶어 시드 평균으로 다시 집계했다(hop 160, fusion 변형 제외).</p>
+<div class="tw"><table>
+<tr><th>고정 설정</th><th>Rep 2</th><th>Rep 4</th><th>Rep 6</th><th>Rep 8</th><th>MP 2</th><th>MP 4</th><th>MP 6</th><th>MP 8</th><th>승</th><th>동</th><th>패</th></tr>
+<tr><td><b>eat+LLRD+cs</b></td><td>0.2751</td><td>0.2615</td><td class="w">0.2313</td><td>0.2359</td><td class="w">0.8868</td><td class="w">0.7593</td><td class="l">0.7879</td><td>0.7373</td><td>3</td><td>4</td><td>1</td></tr>
+<tr><td><b>sslam+LLRD+cs</b></td><td class="w">0.2670</td><td>0.2573</td><td>0.2378</td><td>0.2402</td><td class="w">0.8888</td><td class="w">0.7744</td><td>0.7473</td><td class="l">0.9723</td><td>3</td><td>4</td><td>1</td></tr>
+<tr><td>sslam+LLRD</td><td>0.2770</td><td>0.2575</td><td>0.2396</td><td>0.2394</td><td>0.8991</td><td>0.7807</td><td class="l">0.7848</td><td class="l">0.9806</td><td>1</td><td>5</td><td>2</td></tr>
+<tr><td>sslam (기본)</td><td>0.2775</td><td>0.2659</td><td>0.2336</td><td>0.2384</td><td>0.9000</td><td class="l">0.8335</td><td class="l">0.8724</td><td class="l">0.9782</td><td>1</td><td>4</td><td>3</td></tr>
+<tr><td>eat+LLRD</td><td>0.2823</td><td>0.2715</td><td class="l">0.2459</td><td class="l">0.2533</td><td>0.9018</td><td>0.7710</td><td class="l">0.8004</td><td class="l">0.8011</td><td>1</td><td>3</td><td>4</td></tr>
+</table></div>
+<p>여덟 칸을 모두 진입한 다섯 설정 중 <b>무패인 것은 하나도 없다</b>. 최상위 두 설정은 각각 3승 4동률 1패로 동점인데, <b>패하는 칸이 서로 다르다</b> — eat+LLRD+cs는 MP3D 6ch(0.7879)에서, sslam+LLRD+cs는 MP3D 8ch(0.9723)에서 진다. 그리고 각자가 지는 칸을 상대가 덮는다(MP3D 6ch sslam 0.7473 / MP3D 8ch eat 0.7373). 두 백본은 <b>대체재가 아니라 상보재</b>이며, 이것이 "하나의 통일 구조"라는 목표가 아직 달성되지 않은 정확한 이유다. conv stem의 기여도 여기서 다시 확인된다 — stem을 빼면 두 백본 모두 승수가 3에서 1로 떨어진다.</p>
+<h3>native가 그 자리를 대신할 수 있는가</h3>
+<p>native는 conv stem이 풀려던 문제 자체를 없앤다 — 사전학습 patch embedding을 버리지 않으므로 대체할 입력층이 없다. 그렇다면 stem 설계를 통째로 지우고 native 하나로 갈 수 있는가. 현재까지의 답은 <b>hop에 달려 있다</b>.</p>
+<div class="tw"><table>
+<tr><th>칸</th><th>conv stem</th><th>native</th><th>Δ</th><th>판정</th></tr>
+<tr><td>Replica 4ch, hop 160</td><td>0.2573</td><td>0.2685</td><td>+0.0112</td><td class="l">native 패</td></tr>
+<tr><td>Replica 4ch, hop 44</td><td>0.2496</td><td>0.2474</td><td>−0.0022</td><td>동률</td></tr>
+<tr><td>MP3D 4ch, hop 44</td><td>0.7562</td><td>0.7579</td><td>+0.0017</td><td>동률</td></tr>
+<tr><td>MP3D 6ch, hop 160</td><td>0.8819 (val)</td><td>0.9047 (val)</td><td>+0.0228</td><td>학습 중</td></tr>
+<tr><td>MP3D 8ch, hop 160</td><td>1.1002 (val)</td><td>1.0892 (val)</td><td>−0.0110</td><td>학습 중</td></tr>
+</table></div>
+<p>결론은 <b>아직 대체할 수 없다</b>는 쪽이다. hop 44에서 native는 conv stem과 두 칸 모두 동률이며(±0.002), 이것은 "conv stem 없이 같은 성능"이라는 뜻이므로 단순화의 근거로는 충분하다. 그러나 hop 160에서는 규칙상 <b>진다</b>(+0.0112). 더 중요한 것은 결정적 칸의 중간 성적이다 — MP3D 8ch에서 native의 val 1.0892는 conv stem의 1.1002보다 근소하게 나을 뿐 <b>여전히 붕괴 분지 안</b>이고(정상 칸은 0.75 부근), MP3D 6ch에서는 오히려 뒤진다. 즉 사전학습 입력층을 보존하는 것만으로는 §8이 지목한 통합부 실패가 풀리지 않는다. native의 값은 stem 설계를 없애는 <b>단순화</b>에 있지, conv stem이 MP3D에서 벌어들인 이득의 <b>대체</b>에 있지 않다 — 적어도 시간 해상도가 확보된 입력에서만 그 단순화가 공짜다.</p>
 <h3>어디까지 확인됐는가</h3>
 <div class="tw"><table><caption style="text-align:left;font-weight:600;padding:.3rem 0">입력 수정의 적용 범위 (test MAE; 회색 = 학습/평가 진행 중)</caption>
 <tr><th>데이터셋</th><th>채널</th><th>CNN hop160</th><th>cs hop160</th><th>CNN hop44</th><th>cs hop44</th><th>native hop44</th></tr>
@@ -201,11 +223,13 @@ dl div{margin:4px 0}
 <tr><td>Replica</td><td>6ch</td><td>0.2384</td><td>0.2378</td><td>진행 중</td><td>진행 중</td><td>—</td></tr>
 <tr><td>Replica</td><td>8ch</td><td>0.2368</td><td>0.2402</td><td>진행 중</td><td>진행 중</td><td>—</td></tr>
 <tr><td>MP3D</td><td>2ch</td><td>0.9084</td><td>0.8888</td><td>진행 중</td><td>진행 중</td><td>—</td></tr>
-<tr><td>MP3D</td><td><b>4ch</b></td><td>0.7849</td><td>0.7744</td><td>평가 중</td><td>평가 중</td><td>평가 중</td></tr>
+<tr><td>MP3D</td><td><b>4ch</b></td><td>0.7849</td><td>0.7744</td><td class="w">0.7744</td><td class="w"><b>0.7562</b></td><td class="w">0.7579</td></tr>
 <tr><td>MP3D</td><td>6ch</td><td>0.7502</td><td>0.7473</td><td>진행 중</td><td>진행 중</td><td>—</td></tr>
 <tr><td>MP3D</td><td>8ch</td><td>0.7467</td><td class="l">0.9723</td><td>진행 중</td><td>진행 중</td><td>—</td></tr>
 </table></div>
-<p><b>한 칸은 결과가 아니다.</b> 위 결론은 현재 Replica 4ch 하나에 근거하며, 나머지 여섯 칸은 통일 세팅으로 학습 중이다(결정적인 두 칸 MP3D 8ch·Replica 8ch에는 CNN 대조군을 붙였다). 특히 MP3D 8ch가 먼저 돌아가는데, 그 칸에는 입력과 §8의 통합부 실패를 잇는 <b>메커니즘 가설</b>이 있기 때문이다: hop 160에서 거리축이 28배 복제돼 있다면 마이크 간 차이 D<sub>i</sub> = S<sub>i</sub> − S̄ 자체가 애초에 작고, 작은 차이는 평균으로 뭉개기 쉽다. 시간 샘플링이 촘촘해지면 D<sub>i</sub>가 커져야 한다. 이는 예측이며 <code>analysis/diff_stats.py</code>가 직접 반증할 수 있다 — hop 44에서 dratio가 올라가면 입력과 통합부는 <b>같은 문제</b>이고 입력 수정만으로 통일 구조가 가능하다. dratio가 그대로인데 MAE만 움직이면 별개 문제이고 §8의 구조 변경이 계속 필요하다.</p>
+<p><b>두 번째 칸이 확인을 주었다.</b> MP3D 4ch에서도 hop 44는 두 아키텍처 모두를 움직인다 — CNN 0.7849 → 0.7744(−0.0105), AFM 0.7744 → <b>0.7562</b>(−0.0182, 셀 신기록으로 기존 최고 0.7593을 넘는다). 네 개의 (데이터셋 × 아키텍처) 조합 전부에서 −0.0077 ~ −0.0182 범위로 개선되며, 이 캠페인에서 이만큼 일관되게 작동한 개입은 없었다.</p>
+<p><b>다만 이득의 배분은 데이터셋마다 다르고, 이는 앞 문단의 "공유 병목" 서술을 제한한다.</b> CNN이 얻는 양은 두 데이터셋이 거의 같지만(−0.0100 / −0.0105), AFM은 MP3D에서 두 배 이상을 가져간다(−0.0077 / −0.0182). 결과적으로 CNN-AFM 격차는 Replica에서 0.0023 → 0.0000으로 닫히고 <b>MP3D에서는 0.0105 → 0.0182로 벌어진다</b>. 방향을 읽자면 MP3D는 방이 크고 복잡해 원거리·잔향 정보의 비중이 크고 그것이 AFM이 강한 대역인데, 실제로 hop 44에서 AFM의 원거리는 3.7951 → 3.7266으로 개선되는 반면 CNN의 원거리는 3.9864로 오히려 나빠진다. 단 이는 한 칸의 사후 해석이며 나머지 칸이 검증해야 한다.</p>
+<p><b>여섯 칸은 아직 결과가 아니다.</b> 위 결론은 4ch 두 칸에 근거하며, 나머지 여섯 칸은 통일 세팅으로 학습 중이다(결정적인 두 칸 MP3D 8ch·Replica 8ch에는 CNN 대조군을 붙였다). 특히 MP3D 8ch가 먼저 돌아가는데, 그 칸에는 입력과 §8의 통합부 실패를 잇는 <b>메커니즘 가설</b>이 있기 때문이다: hop 160에서 거리축이 28배 복제돼 있다면 마이크 간 차이 D<sub>i</sub> = S<sub>i</sub> − S̄ 자체가 애초에 작고, 작은 차이는 평균으로 뭉개기 쉽다. 시간 샘플링이 촘촘해지면 D<sub>i</sub>가 커져야 한다. 이는 예측이며 <code>analysis/diff_stats.py</code>가 직접 반증할 수 있다 — hop 44에서 dratio가 올라가면 입력과 통합부는 <b>같은 문제</b>이고 입력 수정만으로 통일 구조가 가능하다. dratio가 그대로인데 MAE만 움직이면 별개 문제이고 §8의 구조 변경이 계속 필요하다.</p>
 <h2>10. 타당성 위협 — 무엇이 닫혔고 무엇이 열려 있는가</h2>
 <p>결론이 공격받을 수 있는 지점을 상태와 함께 정리한다. 닫힌 항목은 본문에 이미 반영되어 있고, 열린 항목은 결론의 강도를 제한한다.</p>
 <p><b>[닫힘] 판정 라벨의 일관성.</b> 2026-09-08에 전 칸을 동률 규칙으로 재감사했다. 격차 0.01 미만이던 과거 "승" 라벨 여섯 건(eat MP3D 2/8ch, sslam Replica 6ch, sslam+LLRD Replica 4ch·MP3D 2ch, EchoDiffusion MP3D 2ch)을 동률로 강등하고, eat MP3D 6ch을 규칙상 패로 명기했다. §3의 스코어카드와 표의 초록 표시는 감사 후 라벨이다.</p>
