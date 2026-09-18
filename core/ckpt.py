@@ -40,10 +40,12 @@ def build(args, DM):
     dmode = args.get("data_mode") or _NV2MODE[nv]
     if args.get("data_module") and args["data_module"] != DM.__name__:        # checkpoints that recorded their dataset
         raise RuntimeError(f"checkpoint was trained with DATA_MODULE={args['data_module']} but {DM.__name__} is loaded")
-    want_hop = args.get("stft_hop", 160)          # input-resolution study (STFT_HOP); 160 = released recipe
-    if want_hop != getattr(DM, "HOP", 160):
-        raise RuntimeError(f"checkpoint was trained with STFT_HOP={want_hop} but the loaded {DM.__name__} "
-                           f"uses hop {getattr(DM, 'HOP', 160)} — re-run with STFT_HOP={want_hop}")
+    for key, env, dflt in (("stft_hop", "HOP", 160), ("stft_win", "WIN", 400), ("stft_nfft", "N_FFT", 512)):
+        want = args.get(key, dflt)                # input-resolution study; the released recipe is 160/400/512
+        if want != getattr(DM, env, dflt):
+            raise RuntimeError(f"checkpoint was trained with {key.upper()}={want} but the loaded "
+                               f"{DM.__name__} uses {getattr(DM, env, dflt)} — re-run with "
+                               f"STFT_{env.replace('N_FFT','NFFT')}={want}")
     # The released model is the full-resolution multi-scale OAA with AdaLN conditioning; refuse checkpoints
     # trained with research-only options that this code base no longer implements.
     for k, want in (("cond_mode", "adaln"), ("full_res_enc", True), ("multi_scale_lift", True)):

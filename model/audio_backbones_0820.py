@@ -261,7 +261,7 @@ class AFMBackbone(nn.Module):
     DIM, DEPTH = 768, 12
 
     def __init__(self, name, out_dim=256, lh=LH, lw=LW, pretrained=True, verbose=True, stem="linear",
-                 input_norm="std"):
+                 input_norm="std", patch_hw=None):
         super().__init__()
         assert name in _SPECS, f"unknown audio backbone {name} (choose from {list(_SPECS)})"
         assert stem in _STEMS, f"bad afm stem {stem} (choose from {list(_STEMS)})"
@@ -287,7 +287,12 @@ class AFMBackbone(nn.Module):
             n_mels = s["grid"][1] * 16 if s["layout"] == "tf" else s["grid"][0] * 16
             self.register_buffer("mel_fb", _mel_fb(n_mels, 256, _SR), persistent=False)
         else:
-            ph, pw = s.get("patch", (256 // lh, 512 // lw))               # default 16x16 on the 256x512 spec
+            # patch_hw overrides the (freq, time) patch size. The token COUNT must stay lh*lw, so the
+            # only free choice is how those tokens are split between the two axes: (16,16) -> 16 freq x
+            # 32 time (released), (8,32) -> 32 freq x 16 time, (32,8) -> 8 freq x 64 time. This is the
+            # control for "is the released grid spending time tokens it has no distinct frames for?"
+            # -- at hop 160 the spectrogram holds 18 real frames behind 32 time tokens.
+            ph, pw = patch_hw or s.get("patch", (256 // lh, 512 // lw))    # default 16x16 on the 256x512 spec
             self.grid_hw = (256 // ph, 512 // pw)                         # token grid (freq rows, time cols)
             M = self.grid_hw[0] * self.grid_hw[1]
             assert M == lh * lw, f"patch {ph}x{pw} gives {M} tokens, OAA needs {lh * lw}"
@@ -423,7 +428,7 @@ class AFMViewEncoder(nn.Module):
     CNN fine path (ViewEncoder truncated at its (2lh, 2lw) fine tap, weights fresh, base LR)."""
     def __init__(self, name, C=256, ngf=64, in_ch=1, norm="group", lh=LH, lw=LW,
                  enc_res=(256, 512), stem_stride1=False, pretrained=True, afm_stem="linear",
-                 afm_input_norm="std"):
+                 afm_input_norm="std", afm_patch=None):
         super().__init__()
         assert in_ch == 1, "AFM encoder supports 1 channel per observation"
         fe = ViewEncoder(C, ngf, in_ch, norm, lh, lw, enc_res, stem_stride1)
@@ -432,7 +437,7 @@ class AFMViewEncoder(nn.Module):
         self.fine_enc = fe
         self.fine_ch = fe.fine_ch
         self.afm = AFMBackbone(name, out_dim=C, lh=lh, lw=lw, pretrained=pretrained, stem=afm_stem,
-                               input_norm=afm_input_norm)
+                               input_norm=afm_input_norm, patch_hw=afm_patch)
         self.C, self.lh, self.lw = C, lh, lw
         self.enc_res, self.stem_stride1 = enc_res, stem_stride1
 
@@ -472,7 +477,7 @@ class OAAv2DepthAFM(OAAv2Depth):
         and adds a zero-init projection of them to that observation's coarse tokens.
     """
     def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", afm_input_norm="std",
-                 mic_diff="none", fine_res=False, **kw):
+                 mic_diff="none", fine_res=False, afm_patch=None, **kw):
         super().__init__(**kw)
         assert audio_backbone in _SPECS, f"bad audio_backbone {audio_backbone}"
         assert mic_diff in ("none", "res", "gate", "gate_ctx"), f"bad mic_diff {mic_diff}"
@@ -481,7 +486,8 @@ class OAAv2DepthAFM(OAAv2Depth):
         self.last_gate = None; self.last_gate_fine = None
         self.enc = AFMViewEncoder(audio_backbone, C=self.C, in_ch=self.in_ch, lh=self.lh, lw=self.lw,
                                   enc_res=self.enc_res, stem_stride1=kw.get("stem_stride1", False),
-                                  pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm)
+                                  pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm,
+                                  afm_patch=afm_patch)
         if mic_diff != "none":
             self.diff_proj = nn.Linear(self.C, self.C)
             nn.init.zeros_(self.diff_proj.weight); nn.init.zeros_(self.diff_proj.bias)
@@ -581,7 +587,8 @@ def build_afm_model(args_dict, pretrained=True):
         no_pose_emb=a.get("no_pose_emb", False) or False, no_ray_emb=a.get("no_ray_emb", False) or False,
         no_geo_bias=a.get("no_geo_bias", False) or False, no_tf_pe=a.get("no_tf_pe", False) or False,
         no_cross=a.get("no_cross", False) or False,
-        mic_diff=a.get("mic_diff", "none") or "none", fine_res=a.get("fine_res", False) or False)
+        mic_diff=a.get("mic_diff", "none") or "none", fine_res=a.get("fine_res", False) or False,
+        afm_patch=tuple(a["afm_patch"]) if a.get("afm_patch") else None)
 
 
 def make_param_groups(model, base_lr, afm_lr_ratio=0.1, wd=1e-4, llrd=0.0):

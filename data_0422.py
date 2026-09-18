@@ -32,7 +32,18 @@ H, W = 256, 512
 # on the axis that encodes distance. Any value other than the default disables the pre-built spec
 # cache (it was rendered at hop 160) and is recorded in the checkpoint args so eval can refuse a
 # mismatch. Frequency content is untouched: only the sampling of the time axis changes.
-N_FFT, WIN, HOP = 512, 400, int(os.environ.get("STFT_HOP", 160))
+# N_FFT / WIN are env-overridable (STFT_NFFT / STFT_WIN) alongside STFT_HOP, for the
+# input-resolution study. They are NOT the same axis:
+#   hop  = how densely the time axis is SAMPLED. The released 160 already satisfies hop <= win/2,
+#          so 44 is ~4.5x oversampling and adds little genuinely new information.
+#   win  = what the time axis can RESOLVE. win 400 (8.33 ms) is a 143 cm round-trip distance
+#          resolution -- coarse for a task whose errors are ~25 cm. Shortening the window is the
+#          only way to actually sharpen time; a smaller n_fft additionally cuts the frequency bin
+#          count, so vary WIN alone (zero-padded STFT) to keep the two axes separable.
+# Any non-default value disables the prebuilt spec cache and is recorded in the checkpoint args.
+N_FFT = int(os.environ.get("STFT_NFFT", 512))
+WIN   = int(os.environ.get("STFT_WIN", 400))
+HOP   = int(os.environ.get("STFT_HOP", 160))
 
 # Replica poses come in groups of 4 consecutive steps = same position, yaws 0/90/180/270
 # (verified). A sample is indexed by a "front" step; extra views are group-relative yaw slots
@@ -119,7 +130,7 @@ def _load_wave(scene, front, mode):
     return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
-_SPEC_CACHE = os.environ.get("REPLICA_SPEC_CACHE", "") if HOP == 160 else ""   # output of tools/build_spec_cache_replica.py (fp32, bit-identical to on-the-fly)
+_SPEC_CACHE = os.environ.get("REPLICA_SPEC_CACHE", "") if (HOP, WIN, N_FFT) == (160, 400, 512) else ""   # output of tools/build_spec_cache_replica.py (fp32, bit-identical to on-the-fly)
 
 
 def _spec1(scene, step):
