@@ -221,12 +221,31 @@ class _FactorizedStem(nn.Module):
         return self.rest(F.gelu(self.t(F.gelu(self.f(x)))))
 
 
-def _plain_conv_stem(dim):
-    """A0 (released): 4 x stride-2 3x3 convs, trailing GELU dropped (linear-out like the ViT stem)."""
+def _plain_conv_stem(dim, patch=(16, 16)):
+    """A0 (released): 4 x stride-2 3x3 convs, trailing GELU dropped (linear-out like the ViT stem).
+
+    `patch` is the total (freq, time) downsampling the stem must produce. The released 16x16 is four
+    stride-(2,2) steps. A non-square patch (the token-allocation control, e.g. 8x32) is reached by
+    redistributing the SAME four steps per axis -- 8 = 2,2,2,1 and 32 = 4,2,2,2 -- so depth, channel
+    schedule and kernel size are unchanged and the stem's parameter count stays identical. Only where
+    the strides fall differs, which is exactly the variable under test.
+    """
+    import math as _m
+
+    def sched(p):
+        k = int(_m.log2(p))
+        assert 2 ** k == p, f"patch side {p} must be a power of two"
+        assert 0 <= k <= 8, f"patch side {p} out of range"
+        st = [1, 1, 1, 1]                                    # spread k halvings over exactly 4 layers
+        for i in range(k):
+            st[3 - (i % 4)] *= 2
+        return st
+
+    sh, sw = sched(patch[0]), sched(patch[1])
     ch = [1, 64, 128, 256, dim]
     layers = []
     for i in range(4):
-        layers += [nn.Conv2d(ch[i], ch[i + 1], 3, 2, 1), nn.GELU()]
+        layers += [nn.Conv2d(ch[i], ch[i + 1], 3, (sh[i], sw[i]), 1), nn.GELU()]
     return nn.Sequential(*layers[:-1])
 
 
@@ -297,8 +316,11 @@ class AFMBackbone(nn.Module):
             M = self.grid_hw[0] * self.grid_hw[1]
             assert M == lh * lw, f"patch {ph}x{pw} gives {M} tokens, OAA needs {lh * lw}"
             if stem != "linear":
-                assert (ph, pw) == (16, 16), "conv stems only support the 16x16 grid"
-                self.patch = _STEMS[stem](self.DIM)
+                if stem == "conv":
+                    self.patch = _plain_conv_stem(self.DIM, (ph, pw))     # any power-of-two patch
+                else:
+                    assert (ph, pw) == (16, 16), f"stem {stem} only supports the 16x16 grid"
+                    self.patch = _STEMS[stem](self.DIM)
             else:
                 self.patch = nn.Conv2d(1, self.DIM, (ph, pw), (ph, pw))   # NEW (task-specific, base LR)
         self.pos_embed = nn.Parameter(torch.zeros(1, lh * lw, self.DIM))  # pretrained (interpolated)
