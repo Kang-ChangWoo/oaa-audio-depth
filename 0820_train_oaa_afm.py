@@ -63,7 +63,8 @@ def main():
     p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
     p.add_argument("--afm-input-norm", default="std", choices=["std", "db", "db_minmax"])  # AFM input statistics
     p.add_argument("--loss-absrel", type=float, default=0.0)    # + lambda * masked AbsRel (near-field upweighting; 0 = paper L1)
-    p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
+    # up to 24 for the microphone-scaling study (data_micgain: 12 binaural headings)
+    p.add_argument("--nviews", type=int, default=4, choices=list(range(2, 26, 2)))
     p.add_argument("--dim", type=int, default=256)
     p.add_argument("--rounds", type=int, default=2)
     p.add_argument("--lift-h", type=int, default=16)
@@ -93,6 +94,7 @@ def main():
     a.data_module = os.environ.get("DATA_MODULE", "data_mp3d")
     a.afm_patch = [int(x) for x in a.afm_patch.split(",")] if a.afm_patch else None
     a.stft_win, a.stft_nfft = getattr(_DM, "WIN", 400), getattr(_DM, "N_FFT", 512)
+    a.stft_window = getattr(_DM, "WINDOW", 0)     # input crop length in samples (context ablation)
     a.stft_hop = getattr(_DM, "HOP", 160)      # input-resolution study: recorded so eval can refuse a mismatch
     torch.manual_seed(a.seed); np.random.seed(a.seed); random.seed(a.seed)
     device = torch.device("cuda")

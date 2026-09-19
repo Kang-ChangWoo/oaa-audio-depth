@@ -18,7 +18,12 @@ ROOT = os.environ.get("MP3D_ROOT", "data/matterport3d_0303renew")     # set MP3D
 KEYS = os.environ.get("MP3D_KEYS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "splits", "mp3d"))  # {split}_keys.json
 SR = 48000
 MAX_DEPTH = 10.0
-WINDOW = 2823   # MP3D legacy convention (340 m/s round-trip @10 m) — 2026-07-24: MP3D and Replica keep
+# Input crop length is env-overridable (STFT_WINDOW, in samples) for the context ablation. The
+# source wavs are far longer than the released crop -- Replica 1641 ms, MP3D >=1147 ms -- so a longer
+# context needs no re-rendering. 210 ms (10080) at hop 160 yields exactly 64 STFT frames, matching
+# the released crop at hop 44, which is what makes "denser sampling" separable from "longer acoustic
+# support". A non-default value disables the spec cache and is recorded in the checkpoint args.
+WINDOW = int(os.environ.get("STFT_WINDOW", 2823))   # MP3D legacy convention (340 m/s round-trip @10 m) — 2026-07-24: MP3D and Replica keep
 #               # their own dataset-specific windows (Replica: 343 m/s = 2799). Matches cached checkpoints.
 H, W = 256, 512
 # STFT hop is env-overridable (STFT_HOP) for the input-resolution study: the released recipe
@@ -111,7 +116,7 @@ def _load_wave(scene, front, mode, frames=WINDOW):
     return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
-_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "") if (HOP, WIN, N_FFT) == (160, 400, 512) else ""   # output of tools/build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
+_SPEC_CACHE = os.environ.get("MP3D_SPEC_CACHE", "") if (HOP, WIN, N_FFT, WINDOW) == (160, 400, 512, 2823) else ""   # output of tools/build_spec_cache_mp3d.py (fp32, bit-identical to on-the-fly)
 
 
 def _spec1(scene, step):

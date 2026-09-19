@@ -24,7 +24,12 @@ from torch.utils.data import Dataset, DataLoader
 ROOT = os.environ.get("REPLICA_ROOT", "data/replica_0422_lite")     # set REPLICA_ROOT to the dataset root
 SR = 48000
 MAX_DEPTH = 10.0                                  # same as MP3D (data.py); depth >10 m clamped to 1.0
-WINDOW = int(round(2 * MAX_DEPTH / 343.0 * SR))   # ~2799 samples (= MP3D's ~2823 @10 m round-trip)
+# Input crop length is env-overridable (STFT_WINDOW, in samples) for the context ablation. The
+# source wavs are far longer than the released crop -- Replica 1641 ms, MP3D >=1147 ms -- so a longer
+# context needs no re-rendering. 210 ms (10080) at hop 160 yields exactly 64 STFT frames, matching
+# the released crop at hop 44, which is what makes "denser sampling" separable from "longer acoustic
+# support". A non-default value disables the spec cache and is recorded in the checkpoint args.
+WINDOW = int(os.environ.get("STFT_WINDOW", 2799))   # ~2799 samples (= MP3D's ~2823 @10 m round-trip)
 H, W = 256, 512
 # STFT hop is env-overridable (STFT_HOP) for the input-resolution study: the released recipe
 # (hop 160 = 3.33 ms @ 48 kHz) yields only ~18 real frames over the 58 ms clip, which the cache then
@@ -130,7 +135,7 @@ def _load_wave(scene, front, mode):
     return torch.cat([wav[o][e:e + 1] for o, e in chans], 0)
 
 
-_SPEC_CACHE = os.environ.get("REPLICA_SPEC_CACHE", "") if (HOP, WIN, N_FFT) == (160, 400, 512) else ""   # output of tools/build_spec_cache_replica.py (fp32, bit-identical to on-the-fly)
+_SPEC_CACHE = os.environ.get("REPLICA_SPEC_CACHE", "") if (HOP, WIN, N_FFT, WINDOW) == (160, 400, 512, 2799) else ""   # output of tools/build_spec_cache_replica.py (fp32, bit-identical to on-the-fly)
 
 
 def _spec1(scene, step):

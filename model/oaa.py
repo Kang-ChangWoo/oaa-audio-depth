@@ -222,8 +222,15 @@ class OAAv2Depth(nn.Module):
             self.view_pose = list(_POOL8)
         elif nviews == 6:                                                # loader mode 'r6' order: 0LR + 90LR + 270LR
             self.view_pose = [_POOL8[j] for j in (0, 1, 2, 3, 6, 7)]
-        else:
+        elif nviews <= 4:
             self.view_pose = _ALL_POSES[:nviews]                        # nviews=2 -> [0L,0R]; 4 -> [0L,0R,90R,270L]
+        else:
+            # microphone-scaling study: more binaural headings than the released rig has. Only a
+            # placeholder -- the loader passes the true view_poses at forward time (data_micgain
+            # records the dataset's own bisection ordering) and _pose_tensors prefers those.
+            assert nviews % 2 == 0, f"nviews {nviews} must be even (binaural headings)"
+            k = nviews // 2
+            self.view_pose = [(2 * math.pi * (j // 2) / k, (-1.0, 1.0)[j % 2]) for j in range(nviews)]
         self.register_buffer("dir6_buf", _dir_pe(lh, lw, torch.device("cpu")), persistent=False)
         # multi-scale decoder: stage-0 upsample (lh,lw)->(2lh,2lw) + fine ray-lift skip, then remaining stages
         self.up_stages, up_ch = _make_up(C, norm, lh, lw, deep=dec_deep)

@@ -1,19 +1,24 @@
 #!/bin/bash
-# Single serialised dispatcher for every remaining 0820 queue.
+# Serialised dispatcher for the additional-experiment programme (2026-09-20).
 #
-# Why this replaces the per-stage dispatchers. Each stage script ran its own loop that (a) polled
-# for a GPU under 2000 MB, then (b) slept 90 s before launching. With two stage loops alive at once
-# the same GPU passed both checks and took two jobs, and five runs died of CUDA OOM in a row. This
-# script holds a lock file per GPU so only one launch can claim a device, verifies the device is
-# still free immediately before exec, and waits for the new process to actually allocate before
-# considering the slot taken.
+# Priorities follow the request, and every job below was checked against the filesystem first so
+# nothing already measured is retrained:
 #
-# Job list is ordered by what the analysis needs next, not by which stage produced it:
-#   1. stage-10 path separation  -- the only open explanation for the hop-44 gain now that
-#      information content, token allocation and time resolution have all been ruled out.
-#   2. stage-9 token control     -- finishes the grid that ruled token allocation out.
-#   3. stage-9 window / hop      -- the remaining axes, lowest priority since win 100 at hop 160
-#      already came back clearly worse (0.3872 vs 0.2927).
+#  P1  the ONE missing cell of the current-best 8-cell benchmark. A sweep of comparison_0820 args
+#      found seven of the eight sslam+LLRD+conv-stem+hop44 cells already trained AND evaluated;
+#      only Replica 2ch is absent. (exp 1)
+#  P2  the hop/context ablation on MP3D 4ch. Conditions A (58.3 ms, hop 160 -> 0.7744) and
+#      B (58.3 ms, hop 44 -> 0.7562) already exist, so only C and D are new. C is the matched-frame
+#      control: the source wavs are much longer than the released crop (Replica 1641 ms, MP3D
+#      >= 1147 ms), and 210 ms at hop 160 gives EXACTLY 64 STFT frames -- the same count as 58.3 ms
+#      at hop 44 (verified on real tensors, not arithmetic). If C ~ B the gain is about frame count
+#      or acoustic context; if B > C it is about sampling the short echo densely. D adds both. (exp 2)
+#  P5  multi-seed replication of the result the paper claim rests on (MP3D 8ch hop44) -- already
+#      running as 0820_h44_sslcs_r8_mp3d_s1, not repeated here.
+#
+# Microphone scaling (exp 3) needs a new data module for /root/storage/supple_mic_gain (12 yaw
+# headings = up to 24 channels, nested bisection order) and nviews > 8 support in the model; it is
+# queued separately once that is written and smoke-tested.
 #
 #   bash 0820_dispatch.sh
 cd "$(dirname "$0")"
@@ -21,43 +26,39 @@ export AFM_WEIGHTS=/root/local1/changwoo/_afm_weights HF_HOME=/root/local1/chang
 export REPLICA_ROOT=/root/local2/replica_0422_lite MP3D_ROOT=/root/local1/changwoo/matterport3d_0303renew R0422_SPLIT=off3
 mkdir -p comparison_0820/logs /tmp/0820_gpulock
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
-FREE_MB="${FREE_MB:-2000}"
+# A job needs ~20-27 GB. Earlier dispatchers tested "used < 2000 MB", which says nothing about
+# whether a 49 GB card has room for one more; that produced a second wave of OOM deaths on cards
+# already holding a run. Require actual FREE memory instead.
+NEED_MB="${NEED_MB:-26000}"
 
 SL="--audio-backbone sslam --afm-llrd 0.75 --warmup-ep 8 --afm-stem conv"
-FB="--nviews 4 --data-mode fb --epochs 40 --batch-size 8 --accum 4"
+FBMP="--nviews 4 --data-mode fb --epochs 40 --batch-size 8 --accum 4"
 
-#  name | data module | HOP | WIN | trainer args
+#  name | data module | HOP | WINDOW | trainer args
 JOBS=(
-# --- 1. path separation (stage 10)
-"0820_s10_afm18_rep|data_0422|44|400|$SL $FB --afm-frames 18"
-"0820_s10_fine18_mp3d|data_mp3d|44|400|$SL $FB --fine-frames 18"
-# --- 2. token allocation, remaining cell
-"0820_s9_tok328_h44_rep|data_0422|44|400|$SL $FB --afm-patch 32,8"
-# --- 3. window and hop axes
-"0820_s9_w100_h44_rep|data_0422|44|100|$SL $FB"
-"0820_s9_w200_h44_mp3d|data_mp3d|44|200|$SL $FB"
-"0820_s9_w100_h160_mp3d|data_mp3d|160|100|$SL $FB"
-"0820_s9_w200_h160_mp3d|data_mp3d|160|200|$SL $FB"
-"0820_s9_w100_h44_mp3d|data_mp3d|44|100|$SL $FB"
-"0820_s9_h88_mp3d|data_mp3d|88|400|$SL $FB"
-"0820_s9_h22_mp3d|data_mp3d|22|400|$SL $FB"
-"0820_s9_h88_rep|data_0422|88|400|$SL $FB"
-"0820_s9_h22_rep|data_0422|22|400|$SL $FB"
+# --- P1: the missing benchmark cell
+"0820_h44_sslcs_r2_rep|data_0422|44|2799|$SL --nviews 2 --data-mode r2 --epochs 40 --batch-size 12 --accum 2"
+# --- P2: hop / context ablation, MP3D 4ch. A and B already exist.
+"0820_ctx_C_210ms_h160_mp3d|data_mp3d|160|10080|$SL $FBMP"
+"0820_ctx_D_210ms_h44_mp3d|data_mp3d|44|10080|$SL $FBMP"
+# --- P6: the remaining window/hop axes, lowest priority (win 100 already came back clearly worse)
+"0820_s9_h88_mp3d|data_mp3d|88|2823|$SL $FBMP"
+"0820_s9_h22_mp3d|data_mp3d|22|2823|$SL $FBMP"
 )
 
-launch() {   # $1 gpu  $2 name  $3 dm  $4 hop  $5 win  $6 args
+launch() {   # $1 gpu  $2 name  $3 dm  $4 hop  $5 window  $6 args
   local lock="/tmp/0820_gpulock/$1"
-  exec 9>"$lock"; flock -n 9 || return 1                       # one claim per device
-  local mem; mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$1")
-  [ "$mem" -lt "$FREE_MB" ] || { exec 9>&-; return 1; }         # re-check immediately before exec
-  echo "[dispatch] $2 (hop $4 win $5) -> GPU $1 ($(date +%m/%d\ %H:%M))"
-  CUDA_VISIBLE_DEVICES=$1 DATA_MODULE=$3 STFT_HOP=$4 STFT_WIN=$5 setsid nohup \
+  exec 9>"$lock"; flock -n 9 || return 1
+  local free; free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$1")
+  [ "$free" -ge "$NEED_MB" ] || { exec 9>&-; return 1; }
+  echo "[dispatch] $2 (hop $4 window $5) -> GPU $1 ($(date +%m/%d\ %H:%M))"
+  CUDA_VISIBLE_DEVICES=$1 DATA_MODULE=$3 STFT_HOP=$4 STFT_WINDOW=$5 setsid nohup \
     python3 0820_train_oaa_afm.py --run-name "$2" $6 --lr 5e-4 --out-dir comparison_0820 \
     > "comparison_0820/logs/$2.log" 2>&1 < /dev/null &
-  local t=0                                                     # hold the lock until it allocates
+  local t=0
   while [ $t -lt 300 ]; do
-    mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$1")
-    [ "$mem" -ge "$FREE_MB" ] && break
+    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$1")
+    [ "$free" -lt "$NEED_MB" ] && break
     grep -qiE "OutOfMemory|Traceback" "comparison_0820/logs/$2.log" 2>/dev/null && break
     sleep 10; t=$((t+10))
   done
