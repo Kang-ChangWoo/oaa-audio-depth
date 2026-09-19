@@ -56,6 +56,10 @@ def main():
     # (freq,time) patch size override; token count must stay lh*lw. "8,32" = 32 freq x 16 time
     # tokens, the control for whether the released 16x32 grid over-allocates the time axis.
     p.add_argument("--afm-patch", default="", help='e.g. "8,32" or "32,8"; empty = released 16x16')
+    # path-specific time coarsening: feed ONE branch a coarser effective hop than the other, to
+    # locate where the hop gain lands. 18 = the released hop-160 frame count.
+    p.add_argument("--fine-frames", type=int, default=0)
+    p.add_argument("--afm-frames", type=int, default=0)
     p.add_argument("--afm-llrd", type=float, default=0.0)       # layer-wise LR decay inside the AFM (e.g. 0.75)
     p.add_argument("--afm-input-norm", default="std", choices=["std", "db", "db_minmax"])  # AFM input statistics
     p.add_argument("--loss-absrel", type=float, default=0.0)    # + lambda * masked AbsRel (near-field upweighting; 0 = paper L1)

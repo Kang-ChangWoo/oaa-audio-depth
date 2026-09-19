@@ -445,12 +445,25 @@ class AFMBackbone(nn.Module):
 
 
 # --------------------------------------------------------------------------- OAA integration
+def _time_coarsen(x, n):
+    """Reduce the time axis to n distinct values, then restore the original width.
+
+    This emulates a COARSER STFT hop without touching the dataset: a hop-44 spectrogram carries 64
+    distinct frames behind 512 columns, and coarsening to 18 reproduces the information content (and
+    the replication structure) of the released hop-160 input. It exists so the two branches of the
+    encoder can be fed DIFFERENT effective hops in the same forward pass, which is the only way to
+    ask where the hop-44 gain actually lands — the pretrained AFM, or the fine CNN.
+    """
+    return F.interpolate(F.adaptive_avg_pool2d(x, (x.shape[-2], n)),
+                         size=x.shape[-2:], mode="nearest")
+
+
 class AFMViewEncoder(nn.Module):
     """Drop-in replacement for model.oaa.ViewEncoder: AFM coarse tokens + the ORIGINAL lightweight
     CNN fine path (ViewEncoder truncated at its (2lh, 2lw) fine tap, weights fresh, base LR)."""
     def __init__(self, name, C=256, ngf=64, in_ch=1, norm="group", lh=LH, lw=LW,
                  enc_res=(256, 512), stem_stride1=False, pretrained=True, afm_stem="linear",
-                 afm_input_norm="std", afm_patch=None):
+                 afm_input_norm="std", afm_patch=None, fine_frames=0, afm_frames=0):
         super().__init__()
         assert in_ch == 1, "AFM encoder supports 1 channel per observation"
         fe = ViewEncoder(C, ngf, in_ch, norm, lh, lw, enc_res, stem_stride1)
@@ -462,17 +475,21 @@ class AFMViewEncoder(nn.Module):
                                input_norm=afm_input_norm, patch_hw=afm_patch)
         self.C, self.lh, self.lw = C, lh, lw
         self.enc_res, self.stem_stride1 = enc_res, stem_stride1
+        # path-specific time coarsening (0 = leave the input alone). See _time_coarsen.
+        self.fine_frames, self.afm_frames = int(fine_frames or 0), int(afm_frames or 0)
 
     def forward(self, x):                                                  # x: (B*, 1, 256, 512)
         fe = self.fine_enc
+        x_fine = _time_coarsen(x, self.fine_frames) if self.fine_frames else x
+        x_afm = _time_coarsen(x, self.afm_frames) if self.afm_frames else x
         want = tuple(fe.enc_res) if fe.stem_stride1 else tuple(2 * r for r in fe.enc_res)
-        h = x if x.shape[-2:] == want else F.interpolate(x, size=want, mode="bilinear", align_corners=False)
+        h = x_fine if x_fine.shape[-2:] == want else F.interpolate(x_fine, size=want, mode="bilinear", align_corners=False)
         h = fe.stem(h)
         for blk in fe.net:
             h = blk(h)
         assert h.shape[-2:] == (2 * self.lh, 2 * self.lw), f"fine tap {h.shape}"
         fine = h.flatten(2).transpose(1, 2)                                # (B*, 4M, fine_ch)
-        tok = self.afm(x)                                                  # (B*, M, C)
+        tok = self.afm(x_afm)                                              # (B*, M, C)
         return tok, fine
 
 
@@ -499,7 +516,7 @@ class OAAv2DepthAFM(OAAv2Depth):
         and adds a zero-init projection of them to that observation's coarse tokens.
     """
     def __init__(self, audio_backbone, afm_pretrained=True, afm_stem="linear", afm_input_norm="std",
-                 mic_diff="none", fine_res=False, afm_patch=None, **kw):
+                 mic_diff="none", fine_res=False, afm_patch=None, fine_frames=0, afm_frames=0, **kw):
         super().__init__(**kw)
         assert audio_backbone in _SPECS, f"bad audio_backbone {audio_backbone}"
         assert mic_diff in ("none", "res", "gate", "gate_ctx"), f"bad mic_diff {mic_diff}"
@@ -509,7 +526,7 @@ class OAAv2DepthAFM(OAAv2Depth):
         self.enc = AFMViewEncoder(audio_backbone, C=self.C, in_ch=self.in_ch, lh=self.lh, lw=self.lw,
                                   enc_res=self.enc_res, stem_stride1=kw.get("stem_stride1", False),
                                   pretrained=afm_pretrained, afm_stem=afm_stem, afm_input_norm=afm_input_norm,
-                                  afm_patch=afm_patch)
+                                  afm_patch=afm_patch, fine_frames=fine_frames, afm_frames=afm_frames)
         if mic_diff != "none":
             self.diff_proj = nn.Linear(self.C, self.C)
             nn.init.zeros_(self.diff_proj.weight); nn.init.zeros_(self.diff_proj.bias)
@@ -610,7 +627,8 @@ def build_afm_model(args_dict, pretrained=True):
         no_geo_bias=a.get("no_geo_bias", False) or False, no_tf_pe=a.get("no_tf_pe", False) or False,
         no_cross=a.get("no_cross", False) or False,
         mic_diff=a.get("mic_diff", "none") or "none", fine_res=a.get("fine_res", False) or False,
-        afm_patch=tuple(a["afm_patch"]) if a.get("afm_patch") else None)
+        afm_patch=tuple(a["afm_patch"]) if a.get("afm_patch") else None,
+        fine_frames=a.get("fine_frames", 0) or 0, afm_frames=a.get("afm_frames", 0) or 0)
 
 
 def make_param_groups(model, base_lr, afm_lr_ratio=0.1, wd=1e-4, llrd=0.0):
