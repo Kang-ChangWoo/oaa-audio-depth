@@ -35,7 +35,12 @@ NEED_MB="${NEED_MB:-26000}"
 SL="--audio-backbone sslam --afm-llrd 0.75 --warmup-ep 8 --afm-stem conv --epochs 40"
 
 #  channels | batch | accum        (effective batch ~24 throughout)
-SCHED=( "8|3|8" "24|1|24" "2|12|2" "4|8|3" "6|4|6" "12|2|12" "16|2|12" "20|1|24" "10|2|12" "14|2|12" "18|1|24" "22|1|24" )
+# JOBS shares the dispatcher's format so the same re-scanning loop applies.
+JOBS=()
+for spec in 8:3:8 24:1:24 2:12:2 4:8:3 6:4:6 12:2:12 16:2:12 20:1:24 10:2:12 14:2:12 18:1:24 22:1:24; do
+  IFS=':' read -r ch bs acc <<< "$spec"
+  JOBS+=("0820_mg_ours_m${ch}|--nviews $ch --data-mode m$ch --batch-size $bs --accum $acc")
+done
 
 launch() {   # $1 gpu  $2 name  $3 args
   local lock="/tmp/0820_gpulock/$1"
@@ -56,15 +61,46 @@ launch() {   # $1 gpu  $2 name  $3 args
   exec 9>&-; return 0
 }
 
-i=0
-while [ $i -lt ${#SCHED[@]} ]; do
+# Every sweep re-derives the pending set from the filesystem instead of advancing a cursor.
+# The previous loop walked an index forward and skipped any job whose log already existed at the
+# moment it passed; when a run died of OOM and its log was archived afterwards, that job could
+# never be retried and had to be launched by hand (this happened to the Replica 2ch benchmark
+# cell). Re-scanning also means a job is picked up automatically if its log is removed, and that
+# an OOM death is retried rather than silently lost.
+#
+# A run is considered SETTLED (never relaunched) when its log records [done]; a log that exists
+# without [done] and without a live process is a crashed run, which IS retried, up to MAX_TRY
+# attempts, with the dead log archived as .failN so nothing is overwritten.
+MAX_TRY="${MAX_TRY:-2}"
+declare -A TRIES
+
+pending() {   # echo the indices of jobs still needing a launch
+  local k
+  for k in "${!JOBS[@]}"; do
+    IFS='|' read -r nm _ <<< "${JOBS[$k]}"
+    local lg="comparison_0820/logs/$nm.log"
+    if [ ! -e "$lg" ]; then echo "$k"; continue; fi
+    grep -q "\[done\]" "$lg" 2>/dev/null && continue            # finished
+    pgrep -f -- "--run-name $nm " >/dev/null && continue          # still training
+    # log exists, no [done], no process -> crashed; retry a bounded number of times
+    local t=${TRIES[$nm]:-0}
+    if [ "$t" -lt "$MAX_TRY" ]; then
+      TRIES[$nm]=$((t+1))
+      mv "$lg" "$lg.fail$((t+1))" 2>/dev/null
+      echo "[dispatch] retry $nm (attempt $((t+2))/$((MAX_TRY+1))); previous log -> $lg.fail$((t+1))"
+      echo "$k"
+    fi
+  done
+}
+
+while true; do
+  todo=($(pending))
+  [ ${#todo[@]} -eq 0 ] && break
   for g in $GPUS; do
-    [ $i -ge ${#SCHED[@]} ] && break
-    IFS='|' read -r ch bs acc <<< "${SCHED[$i]}"
-    name="0820_mg_ours_m${ch}"
-    if [ -e "comparison_0820/logs/$name.log" ]; then i=$((i+1)); continue; fi
-    launch "$g" "$name" "$SL --nviews $ch --data-mode m$ch --batch-size $bs --accum $acc" && i=$((i+1))
+    [ ${#todo[@]} -eq 0 ] && break
+    IFS='|' read -r name extra <<< "${JOBS[${todo[0]}]}"
+    if launch "$g" "$name" "$SL $extra"; then todo=("${todo[@]:1}"); fi
   done
   sleep 120
 done
-echo "[dispatch] all ${#SCHED[@]} micgain jobs launched"
+echo "[dispatch] all ${#JOBS[@]} jobs settled"
