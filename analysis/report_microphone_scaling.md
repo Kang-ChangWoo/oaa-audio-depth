@@ -32,7 +32,7 @@ k = 4 reproduces exactly the released r8 input {0, 90, 180, 270}.
 | 2 | 0 | pending | pending | pending |
 | 4 | 0, 180 | pending | pending | pending |
 | 6 | 0, 90, 180 | pending | pending | pending |
-| 8 | 0, 90, 180, 270 | pending | pending | pending |
+| 8 | 0, 90, 180, 270 | pending | 0.2900 | pending |
 | 10 | 0, 30, 90, 180, 270 | pending | pending | pending |
 | 12 | 0, 30, 90, 180, 210, 270 | pending | pending | pending |
 | 14 | 0, 30, 90, 120, 180, 210, 270 | pending | pending | pending |
@@ -40,7 +40,7 @@ k = 4 reproduces exactly the released r8 input {0, 90, 180, 270}.
 | 18 | 0, 30, 60, 90, 120, 180, 210, 270, 300 | pending | pending | pending |
 | 20 | 0, 30, 60, 90, 120, 180, 210, 240, 270, 300 | pending | pending | pending |
 | 22 | 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300 | pending | pending | pending |
-| 24 | 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330 | pending | pending | pending |
+| 24 | 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330 | pending | 0.8922 | pending |
 
 ## Marginal gain per +2 microphones
 
