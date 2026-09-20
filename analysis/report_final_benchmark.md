@@ -10,7 +10,7 @@ Tie rule: |dMAE| < 0.01 is a tie (the campaign's existing threshold).
 
 | Dataset | Ch | EchoDiffusion | OAA-CNN | SSLAM+LLRD+CS+h44 | vs CNN | vs Eco |
 |---|---:|---:|---:|---:|---:|---:|
-| Replica | 2 | 0.2854 | 0.2894 | **pending** | — | — |
+| Replica | 2 | 0.2854 | 0.2894 | **0.2638** | -0.0256 | -0.0216 |
 | Replica | 4 | 0.2695 | 0.2596 | **0.2496** | -0.0100 | -0.0199 |
 | Replica | 6 | 0.2556 | 0.2384 | **0.2353** | -0.0031 | -0.0203 |
 | Replica | 8 | 0.2600 | 0.2368 | **0.2371** | +0.0003 | -0.0229 |
@@ -21,14 +21,32 @@ Tie rule: |dMAE| < 0.01 is a tie (the campaign's existing threshold).
 
 ## Aggregates
 
-- all mean MAE: pending (7 cells)
-- Replica mean MAE: pending (3 cells)
+- all mean MAE: 0.5114 (8 cells)
+- Replica mean MAE: 0.2464 (4 cells)
 - MP3D mean MAE: 0.7763 (4 cells)
 
-- vs OAA-CNN: **5 win / 2 tie / 0 loss**
-- vs EchoDiffusion: **7 win / 0 tie / 0 loss**
+- vs OAA-CNN: **6 win / 2 tie / 0 loss**
+- vs EchoDiffusion: **8 win / 0 tie / 0 loss**
 
-_pending cells: Replica 2ch_
+## Matched-hop control (every model at hop 44)
+
+The table above reads our hop-44 model against baselines trained at hop 160, which prices
+the input recipe together with the encoder. This block retrains both baselines on the same
+input; cells still training read pending.
+
+| Dataset | Ch | OAA-CNN @44 | EchoDiffusion @44 | ours @44 | vs CNN@44 | vs Eco@44 |
+|---|---:|---:|---:|---:|---:|---:|
+| Replica | 2 | pending | pending | **0.2638** | — | — |
+| Replica | 4 | 0.2496 | pending | **0.2496** | +0.0000 | — |
+| Replica | 6 | pending | pending | **0.2353** | — | — |
+| Replica | 8 | 0.2350 | pending | **0.2371** | +0.0021 | — |
+| MP3D | 2 | pending | pending | **0.8836** | — | — |
+| MP3D | 4 | 0.7744 | pending | **0.7562** | -0.0182 | — |
+| MP3D | 6 | pending | pending | **0.7379** | — | — |
+| MP3D | 8 | pending | pending | **0.7275** | — | — |
+
+- matched-hop vs OAA-CNN: **1 win / 2 tie / 0 loss** (3 of 8 cells measured)
+- matched-hop vs EchoDiffusion: **0 win / 0 tie / 0 loss** (0 of 8 cells measured)
 
 ## Baseline run names resolved per cell
 

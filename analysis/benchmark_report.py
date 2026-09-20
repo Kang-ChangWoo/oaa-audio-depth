@@ -87,6 +87,39 @@ def main():
               f"- vs EchoDiffusion: **{wl['eco'][0]} win / {wl['eco'][1]} tie / {wl['eco'][2]} loss**"]
     if missing:
         lines += ["", f"_pending cells: {', '.join(missing)}_"]
+    # ---- matched-hop control: both baselines retrained on the same input recipe
+    H44C = {("Replica","r2"):"0820_h44_cnn_r2_rep", ("Replica","fb"):"0820_h44_cnn_fb_rep",
+            ("Replica","r6"):"0820_h44_cnn_r6_rep", ("Replica","r8"):"0820_h44_cnn_r8_rep",
+            ("MP3D","r2"):"0820_h44_cnn_r2_mp3d", ("MP3D","fb"):"0820_h44_cnn_fb_mp3d",
+            ("MP3D","r6"):"0820_h44_cnn_r6_mp3d", ("MP3D","r8"):"0820_h44_cnn_r8_mp3d_s1"}
+    H44E = {c: f"0820_h44_eco_{m}_{'rep' if d=='Replica' else 'mp3d'}" for (d, m) in
+            [("Replica","r2"),("Replica","fb"),("Replica","r6"),("Replica","r8"),
+             ("MP3D","r2"),("MP3D","fb"),("MP3D","r6"),("MP3D","r8")] for c in [(d, m)]}
+    lines += ["", "## Matched-hop control (every model at hop 44)", "",
+              "The table above reads our hop-44 model against baselines trained at hop 160, which prices",
+              "the input recipe together with the encoder. This block retrains both baselines on the same",
+              "input; cells still training read pending.", "",
+              "| Dataset | Ch | OAA-CNN @44 | EchoDiffusion @44 | ours @44 | vs CNN@44 | vs Eco@44 |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+    mw = {"cnn": [0,0,0], "eco": [0,0,0]}
+    for ds, ch, mode in CELLS:
+        c = (ds, mode); st = REP if ds == "Replica" else MP
+        o = ours(c)
+        cn = st.get(H44C[c]); ec = st.get(H44E[c])
+        f = lambda d: "pending" if d is None else f"{d['MAE']:.4f}"
+        dc = de = "—"
+        if o and cn:
+            g = o["MAE"] - cn["MAE"]; dc = f"{g:+.4f}"
+            mw["cnn"][0 if g < -TIE else (2 if g > TIE else 1)] += 1
+        if o and ec:
+            g = o["MAE"] - ec["MAE"]; de = f"{g:+.4f}"
+            mw["eco"][0 if g < -TIE else (2 if g > TIE else 1)] += 1
+        lines.append(f"| {ds} | {ch} | {f(cn)} | {f(ec)} | **{f(o)}** | {dc} | {de} |")
+    lines += ["", f"- matched-hop vs OAA-CNN: **{mw['cnn'][0]} win / {mw['cnn'][1]} tie / {mw['cnn'][2]} loss** "
+                  f"({sum(mw['cnn'])} of 8 cells measured)",
+              f"- matched-hop vs EchoDiffusion: **{mw['eco'][0]} win / {mw['eco'][1]} tie / {mw['eco'][2]} loss** "
+              f"({sum(mw['eco'])} of 8 cells measured)"]
+
     lines += ["", "## Baseline run names resolved per cell", "", "| cell | OAA-CNN | EchoDiffusion | ours |", "|---|---|---|---|"]
     for ds, ch, mode in CELLS:
         c = (ds, mode)
