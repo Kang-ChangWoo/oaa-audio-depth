@@ -32,11 +32,11 @@ k = 4 reproduces exactly the released r8 input {0, 90, 180, 270}.
 | 2 | 0 | 0.3220 | 0.3226 | pending |
 | 4 | 0, 180 | 0.3051 | 0.3000 | pending |
 | 6 | 0, 90, 180 | pending | 0.2858 | pending |
-| 8 | 0, 90, 180, 270 | pending | 0.2900 | pending |
+| 8 | 0, 90, 180, 270 | 0.2885 | 0.2900 | pending |
 | 10 | 0, 30, 90, 180, 270 | pending | pending | pending |
-| 12 | 0, 30, 90, 180, 210, 270 | pending | pending | pending |
+| 12 | 0, 30, 90, 180, 210, 270 | pending | 0.8833 | pending |
 | 14 | 0, 30, 90, 120, 180, 210, 270 | pending | pending | pending |
-| 16 | 0, 30, 90, 120, 180, 210, 270, 300 | pending | pending | pending |
+| 16 | 0, 30, 90, 120, 180, 210, 270, 300 | pending | 1.1897 | pending |
 | 18 | 0, 30, 60, 90, 120, 180, 210, 270, 300 | pending | pending | pending |
 | 20 | 0, 30, 60, 90, 120, 180, 210, 240, 270, 300 | pending | pending | pending |
 | 22 | 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300 | pending | pending | pending |
@@ -58,4 +58,4 @@ k = 4 reproduces exactly the released r8 input {0, 90, 180, 270}.
 | 20 -> 22 | pending | pending |
 | 22 -> 24 | pending | pending |
 
-_status: Ours 2/12 cells evaluated, EchoDiffusion 0/12._
+_status: Ours 3/12 cells evaluated, EchoDiffusion 0/12._
