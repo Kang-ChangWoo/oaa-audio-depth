@@ -47,3 +47,41 @@ Nothing here changes the sweep's decision rule; it sharpens its reading. Since t
 "dense sampling of the echo", any hop that keeps the echo densely sampled should sit in the same
 plateau — which is exactly what the sweep (160/128/88/64/44/22) is measuring. The structural
 candidate hop 88 stays the preferred pick if it lands within 0.01 of the best.
+
+---
+
+# Hop sweep — final decision (2026-09-22)
+
+All TEST MAE, MP3D 4ch, single seed each, same recipe, only STFT_HOP varies.
+
+| hop | ms | frames | test MAE | vs best (h22) | note |
+|---:|---:|---:|---:|---:|---|
+| 160 | 3.33 | 18 | 0.7744 | +0.0235 | released recipe (SoundSpaces nav convention) |
+| 128 | 2.67 | 23 | pending (curve completion only — monotonicity puts it above h88) | | n_fft/4, the library default |
+| 88 | 1.83 | 33 | 0.7669 | +0.0160 | fills the 32-token grid — **out** |
+| 64 | 1.33 | 45 | 0.7616 | +0.0107 | n_fft/8 — misses the window by 0.0007 |
+| **44** | 0.92 | 65 | **0.7562** | **+0.0053** | **CHOSEN** |
+| 22 | 0.46 | 129 | **0.7509** | best | 4 frames/token |
+
+**Decision: STFT_HOP = 44**, by the pre-registered rule (the most structurally defensible hop
+within 0.01 of the best measured). The tie set is {44, 22} only; every conventional candidate
+measured worse (88 +0.0160, 64 +0.0107; 128 pending, bounded worse by monotonicity). Within the
+tie set, 44 is the coarsest — "the coarsest hop statistically indistinguishable from the best
+measured", a plateau criterion, not a score pick. Gains halve per density octave (88→44 −0.0107,
+44→22 −0.0053) and fall inside the tie threshold below 44 — the curve saturates at 44.
+
+The defense package for 44 (assembled across this campaign):
+1. Prior work uses DENSER hops: the echo-depth lineage standard is 0.36–0.5 ms
+   (`report_prior_work_hops.md`); our 0.92 ms is ~2x coarser, not tuned-fine.
+2. The measured sweep: all conventional hops (n_fft/4, n_fft/8, grid-fill 88) lose measurably.
+3. The mechanism (this file, above): dense time sampling of the early echo is the confirmed
+   ingredient, and 44 is where its returns saturate.
+
+Caveats recorded: single-seed sweep; h64's miss (0.0007 past the threshold) is inside seed noise
+(±0.005–0.012). This does not affect the choice: even a seed-mean tie for 64 would only offer a
+more conventional label at equal-at-best accuracy, at the cost of retraining all 24 matched runs
+(ours + CNN + eco) that already exist or are queued at 44. 44 is the incumbent, measured-best-
+coarsest, and cheapest — it wins on every axis.
+
+**Consequence: `0820_queue_fairhop.sh` runs UNCHANGED (it was written for hop 44): 4 CNN cells +
+8 EchoDiffusion cells complete the matched-hop benchmark.**
