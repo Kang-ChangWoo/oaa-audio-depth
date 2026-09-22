@@ -57,7 +57,7 @@ All TEST MAE, MP3D 4ch, single seed each, same recipe, only STFT_HOP varies.
 | hop | ms | frames | test MAE | vs best (h22) | note |
 |---:|---:|---:|---:|---:|---|
 | 160 | 3.33 | 18 | 0.7744 | +0.0235 | released recipe (SoundSpaces nav convention) |
-| 128 | 2.67 | 23 | pending (curve completion only — monotonicity puts it above h88) | | n_fft/4, the library default |
+| 128 | 2.67 | 23 | 0.7707 | +0.0198 | n_fft/4, the library default — out |
 | 88 | 1.83 | 33 | 0.7669 | +0.0160 | fills the 32-token grid — **out** |
 | 64 | 1.33 | 45 | 0.7616 | +0.0107 | n_fft/8 — misses the window by 0.0007 |
 | **44** | 0.92 | 65 | **0.7562** | **+0.0053** | **CHOSEN** |
