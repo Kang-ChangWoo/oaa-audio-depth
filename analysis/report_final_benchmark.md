@@ -37,7 +37,7 @@ input; cells still training read pending.
 | Dataset | Ch | OAA-CNN @44 | EchoDiffusion @44 | ours @44 | vs CNN@44 | vs Eco@44 |
 |---|---:|---:|---:|---:|---:|---:|
 | Replica | 2 | 0.2744 | 0.2793 | **0.2638** | -0.0106 | -0.0156 |
-| Replica | 4 | 0.2496 | pending | **0.2496** | +0.0000 | — |
+| Replica | 4 | 0.2496 | 0.2710 | **0.2496** | +0.0000 | -0.0214 |
 | Replica | 6 | 0.2424 | pending | **0.2353** | -0.0072 | — |
 | Replica | 8 | 0.2350 | pending | **0.2371** | +0.0021 | — |
 | MP3D | 2 | 0.9065 | pending | **0.8836** | -0.0229 | — |
@@ -46,7 +46,7 @@ input; cells still training read pending.
 | MP3D | 8 | 0.7365 | pending | **0.7275** | -0.0090 | — |
 
 - matched-hop vs OAA-CNN: **3 win / 4 tie / 0 loss** (7 of 8 cells measured)
-- matched-hop vs EchoDiffusion: **1 win / 0 tie / 0 loss** (1 of 8 cells measured)
+- matched-hop vs EchoDiffusion: **2 win / 0 tie / 0 loss** (2 of 8 cells measured)
 
 ## Baseline run names resolved per cell
 
