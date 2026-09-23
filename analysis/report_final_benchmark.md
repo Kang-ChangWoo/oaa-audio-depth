@@ -40,12 +40,12 @@ input; cells still training read pending.
 | Replica | 4 | 0.2496 | pending | **0.2496** | +0.0000 | — |
 | Replica | 6 | 0.2424 | pending | **0.2353** | -0.0072 | — |
 | Replica | 8 | 0.2350 | pending | **0.2371** | +0.0021 | — |
-| MP3D | 2 | pending | pending | **0.8836** | — | — |
+| MP3D | 2 | 0.9065 | pending | **0.8836** | -0.0229 | — |
 | MP3D | 4 | 0.7744 | pending | **0.7562** | -0.0182 | — |
 | MP3D | 6 | pending | pending | **0.7379** | — | — |
 | MP3D | 8 | 0.7365 | pending | **0.7275** | -0.0090 | — |
 
-- matched-hop vs OAA-CNN: **2 win / 4 tie / 0 loss** (6 of 8 cells measured)
+- matched-hop vs OAA-CNN: **3 win / 4 tie / 0 loss** (7 of 8 cells measured)
 - matched-hop vs EchoDiffusion: **0 win / 0 tie / 0 loss** (0 of 8 cells measured)
 
 ## Baseline run names resolved per cell
