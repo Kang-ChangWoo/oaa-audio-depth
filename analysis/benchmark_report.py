@@ -15,6 +15,8 @@ M = ["MAE", "RMSE", "AbsRel", "delta1", "near<3", "mid3-6", "far>6"]
 
 REP = json.load(open("comparison_0820/compare.json"))
 MP  = json.load(open("comparison_0820/mp3d_eval/compare.json"))
+try:    ECO44 = json.load(open("comparison_0820/compare_eco.json"))   # eval_echodiffusion.py writes h44 eco cells here
+except Exception: ECO44 = {}
 OLDR = json.load(open("comparison/compare.json"))
 OLDM = json.load(open("comparison_mp3d/compare.json"))
 ECOR = json.load(open("comparison/compare_eco.json"))
@@ -105,7 +107,7 @@ def main():
     for ds, ch, mode in CELLS:
         c = (ds, mode); st = REP if ds == "Replica" else MP
         o = ours(c)
-        cn = st.get(H44C[c]); ec = st.get(H44E[c])
+        cn = st.get(H44C[c]); ec = st.get(H44E[c]) or ECO44.get(H44E[c])
         f = lambda d: "pending" if d is None else f"{d['MAE']:.4f}"
         dc = de = "—"
         if o and cn:
