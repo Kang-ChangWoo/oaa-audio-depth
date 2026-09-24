@@ -22,13 +22,19 @@
 #
 #   ECHODIFF_PY=/root/local1/changwoo/echodiff_env/bin/python bash 0820_queue_fairhop.sh
 cd "$(dirname "$0")"
+mkdir -p /tmp/0820_gpulock
+# single-instance guard (2026-09-24), same reason as 0820_queue_ecoscale.sh
+exec 8>"/tmp/0820_gpulock/.fairhop.lock"
+flock -n 8 || { echo "[abort] another 0820_queue_fairhop.sh is already running"; exit 0; }
 export REPLICA_ROOT=/root/local2/replica_0422_lite MP3D_ROOT=/root/local1/changwoo/matterport3d_0303renew R0422_SPLIT=off3
 ECHODIFF_PY="${ECHODIFF_PY:-/root/local1/changwoo/echodiff_env/bin/python}"
 mkdir -p comparison_0820/logs /tmp/0820_gpulock
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 NEED_MB="${NEED_MB:-26000}"
 MAX_TRY="${MAX_TRY:-2}"
-declare -A TRIES
+# 2026-09-24: the retry counter lives on the filesystem (how many $lg.failN exist), NOT in a
+# shell array -- pending() runs inside $( ), so assignments to a parent-shell array are discarded
+# and MAX_TRY was never reached (141 identical relaunches of the eco-scale jobs).
 
 CN="--audio-backbone cnn --warmup-ep 4"
 #  name | kind | data module | mode | extra
@@ -81,10 +87,13 @@ pending() {
     if [ ! -e "$lg" ]; then echo "$k"; continue; fi
     grep -q "\[done\]" "$lg" 2>/dev/null && continue
     pgrep -f -- "--run-name $nm " >/dev/null && continue
-    local t=${TRIES[$nm]:-0}
+    local t; t=$(ls -1 "$lg".fail* 2>/dev/null | wc -l)
     if [ "$t" -lt "$MAX_TRY" ]; then
-      TRIES[$nm]=$((t+1)); mv "$lg" "$lg.fail$((t+1))" 2>/dev/null
+      mv "$lg" "$lg.fail$((t+1))" 2>/dev/null
       echo "[dispatch] retry $nm (attempt $((t+2)))" >&2; echo "$k"
+    elif [ ! -e "$lg.gaveup" ]; then
+      : > "$lg.gaveup"
+      echo "[dispatch] GIVE UP $nm after $t failed attempts -- see $lg.fail*" >&2
     fi
   done
 }

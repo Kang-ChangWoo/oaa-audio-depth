@@ -9,11 +9,18 @@
 #
 #   ECHODIFF_PY=/root/local1/changwoo/echodiff_env/bin/python bash 0820_queue_ecoscale.sh
 cd "$(dirname "$0")"
+mkdir -p /tmp/0820_gpulock
+# single-instance guard (2026-09-24): a second copy racing on the same JOBS/logs is what
+# doubled the [gate] line and the dispatch rate.
+exec 8>"/tmp/0820_gpulock/.ecoscale.lock"
+flock -n 8 || { echo "[abort] another 0820_queue_ecoscale.sh is already running"; exit 0; }
 export MICGAIN_ROOT=/root/storage/supple_mic_gain R0422_SPLIT=off3
 ECHODIFF_PY="${ECHODIFF_PY:-/root/local1/changwoo/echodiff_env/bin/python}"
 mkdir -p comparison_0820/logs /tmp/0820_gpulock
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"; NEED_MB="${NEED_MB:-26000}"; MAX_TRY="${MAX_TRY:-2}"
-declare -A TRIES
+# 2026-09-24: the retry counter lives on the filesystem (how many $lg.failN exist), NOT in a
+# shell array -- pending() runs inside $( ), so assignments to a parent-shell array are discarded
+# and MAX_TRY was never reached (141 identical relaunches of the eco-scale jobs).
 
 # GATE: wait until every fairhop job has a log (i.e. has been dispatched at least once)
 FAIRHOP="0820_h44_cnn_r2_rep 0820_h44_cnn_r6_rep 0820_h44_cnn_r2_mp3d 0820_h44_cnn_r6_mp3d 0820_h44_eco_r2_rep 0820_h44_eco_fb_rep 0820_h44_eco_r6_rep 0820_h44_eco_r8_rep 0820_h44_eco_r2_mp3d 0820_h44_eco_fb_mp3d 0820_h44_eco_r6_mp3d 0820_h44_eco_r8_mp3d"
@@ -42,7 +49,10 @@ launch() {   # $1 gpu  $2 name  $3 mode  $4 args
   while [ $t -lt 400 ]; do
     free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$1")
     [ "$free" -lt "$NEED_MB" ] && break
-    grep -qiE "OutOfMemory|Traceback" "comparison_0820/logs/$2.log" 2>/dev/null && break
+    if grep -qiE "OutOfMemory|Traceback" "comparison_0820/logs/$2.log" 2>/dev/null; then
+      echo "[crash] $2 died in ${t}s: $(grep -m1 -A1 Traceback "comparison_0820/logs/$2.log" | tail -1)"
+      break
+    fi
     sleep 10; t=$((t+10))
   done
   exec 9>&-; return 0
@@ -55,10 +65,13 @@ pending() {
     if [ ! -e "$lg" ]; then echo "$k"; continue; fi
     grep -q "\[done\]" "$lg" 2>/dev/null && continue
     pgrep -f -- "--run-name $nm " >/dev/null && continue
-    local t=${TRIES[$nm]:-0}
+    local t; t=$(ls -1 "$lg".fail* 2>/dev/null | wc -l)
     if [ "$t" -lt "$MAX_TRY" ]; then
-      TRIES[$nm]=$((t+1)); mv "$lg" "$lg.fail$((t+1))" 2>/dev/null
+      mv "$lg" "$lg.fail$((t+1))" 2>/dev/null
       echo "[dispatch] retry $nm (attempt $((t+2)))" >&2; echo "$k"
+    elif [ ! -e "$lg.gaveup" ]; then
+      : > "$lg.gaveup"
+      echo "[dispatch] GIVE UP $nm after $t failed attempts -- see $lg.fail*" >&2
     fi
   done
 }

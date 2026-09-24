@@ -1,7 +1,8 @@
 """supple_mic_gain data module — Replica rotated binaural set for the microphone-scaling study.
 
-Selected at runtime via DATA_MODULE=data_micgain. Same loader / IN_CH / POSES interface as
-data_0422, so the trainer, model and eval pipeline are untouched.
+Selected at runtime via DATA_MODULE=data_micgain. Same loader / wave_loader /
+spec_wave_loader / IN_CH / POSES interface as data_0422, so the trainer, model and eval
+pipeline are untouched.
 
 WHY A SEPARATE MODULE. The released replica_0422 set stores four yaws per position in consecutive
 files (audio_NNN.wav, groups of four); this set stores twelve yaws per position under explicit
@@ -153,6 +154,23 @@ class WaveSet(_Base):
         return {"wave": _load_wave(sc, pos, ref, self.mode), "depth": depth, "mask": mask}
 
 
+class SpecWaveSet(_Base):
+    """Both spec AND raw waveform + depth/mask, for EchoDiffusion (needs spec + wave).
+
+    Mirrors data_0422.SpecWaveSet. The spec is built from the SAME stacked wave, which is
+    bit-identical to the per-yaw _spec() path (verified 2026-09-24: max|diff| = 0.0) because
+    _stft_mag is per-channel independent. Added after the eco-scale queue died 141 times on
+    `AttributeError: module 'data_micgain' has no attribute 'spec_wave_loader'`: neither
+    loader (no "wave") nor wave_loader (no "spec"/"idx") satisfies train_echodiffusion.py.
+    """
+
+    def __getitem__(self, i):
+        sc, pos, ref = self.samples[i]
+        wave = _load_wave(sc, pos, ref, self.mode)
+        depth, mask = _load_depth(sc, pos, ref)
+        return {"spec": _stft_mag(wave), "wave": wave, "depth": depth, "mask": mask, "idx": i}
+
+
 def loader(split, batch_size, shuffle, num_workers, mode="m8", *_a, **_k):
     return DataLoader(RotSet(split, mode), batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, drop_last=shuffle, pin_memory=True)
@@ -160,4 +178,9 @@ def loader(split, batch_size, shuffle, num_workers, mode="m8", *_a, **_k):
 
 def wave_loader(split, batch_size, shuffle, num_workers, mode="m8", *_a, **_k):
     return DataLoader(WaveSet(split, mode), batch_size=batch_size, shuffle=shuffle,
+                      num_workers=num_workers, drop_last=shuffle, pin_memory=True)
+
+
+def spec_wave_loader(split, batch_size, shuffle, num_workers, mode="m8", *_a, **_k):
+    return DataLoader(SpecWaveSet(split, mode), batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, drop_last=shuffle, pin_memory=True)
