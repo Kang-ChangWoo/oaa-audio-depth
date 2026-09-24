@@ -15,8 +15,12 @@ mkdir -p /tmp/0820_gpulock
 exec 8>"/tmp/0820_gpulock/.ecoscale.lock"
 flock -n 8 || { echo "[abort] another 0820_queue_ecoscale.sh is already running"; exit 0; }
 export MICGAIN_ROOT=/root/storage/supple_mic_gain R0422_SPLIT=off3
+# 2026-09-24: out-dir is overridable so a node can keep checkpoints on its LOCAL disk
+# (the shared /data is 99% full). Default unchanged -> other nodes behave as before.
+# The fairhop GATE above/below deliberately still reads the SHARED comparison_0820/logs.
+OUT="${OUT:-comparison_0820}"
 ECHODIFF_PY="${ECHODIFF_PY:-/root/local1/changwoo/echodiff_env/bin/python}"
-mkdir -p comparison_0820/logs /tmp/0820_gpulock
+mkdir -p "$OUT/logs" /tmp/0820_gpulock
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"; NEED_MB="${NEED_MB:-26000}"; MAX_TRY="${MAX_TRY:-2}"
 # 2026-09-24: the retry counter lives on the filesystem (how many $lg.failN exist), NOT in a
 # shell array -- pending() runs inside $( ), so assignments to a parent-shell array are discarded
@@ -42,15 +46,18 @@ launch() {   # $1 gpu  $2 name  $3 mode  $4 args
   local free; free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$1")
   [ "$free" -ge "$NEED_MB" ] || { exec 9>&-; return 1; }
   echo "[dispatch] $2 (eco-scale, hop 44) -> GPU $1 ($(date +%m/%d\ %H:%M))"
+  # 8>&- : the trainer must NOT inherit the single-instance lock fd. flock only releases
+  # when the last fd closes, so an inherited fd 8 keeps .ecoscale.lock held for as long as
+  # any job lives -- the queue could then never be restarted while work was in flight.
   CUDA_VISIBLE_DEVICES=$1 DATA_MODULE=data_micgain STFT_HOP=44 setsid nohup "$ECHODIFF_PY" \
-    train_echodiffusion.py --run-name "$2" --mode "$3" $4 --out-dir comparison_0820 \
-    > "comparison_0820/logs/$2.log" 2>&1 < /dev/null &
+    train_echodiffusion.py --run-name "$2" --mode "$3" $4 --resume auto --out-dir "$OUT" \
+    > "$OUT/logs/$2.log" 2>&1 < /dev/null 8>&- &
   local t=0
   while [ $t -lt 400 ]; do
     free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$1")
     [ "$free" -lt "$NEED_MB" ] && break
-    if grep -qiE "OutOfMemory|Traceback" "comparison_0820/logs/$2.log" 2>/dev/null; then
-      echo "[crash] $2 died in ${t}s: $(grep -m1 -A1 Traceback "comparison_0820/logs/$2.log" | tail -1)"
+    if grep -qiE "OutOfMemory|Traceback" "$OUT/logs/$2.log" 2>/dev/null; then
+      echo "[crash] $2 died in ${t}s: $(grep -m1 -A1 Traceback "$OUT/logs/$2.log" | tail -1)"
       break
     fi
     sleep 10; t=$((t+10))
@@ -61,7 +68,7 @@ pending() {
   local k
   for k in "${!JOBS[@]}"; do
     IFS='|' read -r nm _ <<< "${JOBS[$k]}"
-    local lg="comparison_0820/logs/$nm.log"
+    local lg="$OUT/logs/$nm.log"
     if [ ! -e "$lg" ]; then echo "$k"; continue; fi
     grep -q "\[done\]" "$lg" 2>/dev/null && continue
     pgrep -f -- "--run-name $nm " >/dev/null && continue
