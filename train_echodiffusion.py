@@ -63,6 +63,7 @@ def main():
     p.add_argument("--batch-size", type=int, default=12)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--resume", type=str, default="none")  # "auto" = resume from <run-dir>/last.pth if present, or an explicit path
     p.add_argument("--patience", type=int, default=12)  # early stop: epochs without val improvement (eco always peaks ep14-16 then degrades monotonically; best.pth already saved)
     p.add_argument("--port", default="faithful", choices=["faithful", "enhanced"])
     p.add_argument("--cide-cache", default="")   # cache_cide/*.npy — precomputed wav2vec2 embeddings (tools/build_cide_cache.py)  # faithful=as in the original (128x128 + post-hoc upsample), enhanced=improved port (earlier round)
@@ -97,8 +98,30 @@ def main():
                     for sp in ("train", "val")}
         print(f"[cide-cache] loaded {a.cide_cache}", flush=True)
 
-    best = 1e9; best_ep = -1; hist = []
-    for ep in range(a.epochs):
+    best = 1e9; best_ep = -1; hist = []; start_ep = 0
+
+    def _save_last(ep_done):
+        """Resumable snapshot written every epoch; atomic so a kill mid-write cannot corrupt it."""
+        tmp = os.path.join(rd, "last.pth.tmp")
+        torch.save({"state_dict": model.state_dict(), "args": cfg,
+                    "optimizer": opt.state_dict(), "scheduler": sched.state_dict(),
+                    "epoch": ep_done + 1, "best": best, "best_ep": best_ep, "hist": hist}, tmp)
+        os.replace(tmp, os.path.join(rd, "last.pth"))
+
+    if a.resume and a.resume != "none":
+        rpath = os.path.join(rd, "last.pth") if a.resume == "auto" else a.resume
+        if os.path.exists(rpath):
+            ck = torch.load(rpath, map_location=device, weights_only=False)
+            model.load_state_dict(ck["state_dict"])
+            if "optimizer" in ck: opt.load_state_dict(ck["optimizer"])
+            if "scheduler" in ck: sched.load_state_dict(ck["scheduler"])
+            start_ep = int(ck.get("epoch", 0)); best = float(ck.get("best", 1e9))
+            best_ep = int(ck.get("best_ep", -1)); hist = list(ck.get("hist", []))
+            print(f"[resume] {rpath} -> start ep {start_ep}, best={best:.4f}m @ep{best_ep}", flush=True)
+        else:
+            print(f"[resume] no checkpoint at {rpath} -- starting fresh", flush=True)
+
+    for ep in range(start_ep, a.epochs):
         model.train(); t0 = time.time(); run = 0.0; nb = 0
         for b in tr:
             spec = b["spec"].to(device, non_blocking=True); wave = b["wave"][:, :wave_ch].to(device, non_blocking=True)
@@ -128,8 +151,10 @@ def main():
             torch.save({"state_dict": model.state_dict(), "args": cfg}, os.path.join(rd, "best.pth"))
         elif ep - best_ep >= a.patience:
             print(f"[early-stop] no val improvement since ep {best_ep} (patience {a.patience})", flush=True)
+            _save_last(ep)
             break
-    torch.save({"state_dict": model.state_dict(), "args": cfg}, os.path.join(rd, "last.pth"))
+        _save_last(ep)
+    _save_last(a.epochs - 1)
     json.dump({"best_val_mae_m": best, "hist": hist, "args": cfg},
               open(os.path.join(rd, "train_done.json"), "w"), indent=2)
     print(f"[done] best val MAE={best:.4f}m -> {rd}", flush=True)
