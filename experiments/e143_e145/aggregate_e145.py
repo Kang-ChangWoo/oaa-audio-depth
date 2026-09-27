@@ -41,9 +41,21 @@ def pooled_sigma(sa, sb):
     return math.sqrt((sa * sa + sb * sb) / 2.0)
 
 
-def classify(ma, sa, mb, sb):
+N_SEEDS_REQUIRED = 3
+
+
+def classify(ma, sa, mb, sb, na=N_SEEDS_REQUIRED, nb=N_SEEDS_REQUIRED):
+    """PREREG decision rule, UNCHANGED, plus an n != 3 gatekeeper.
+
+    `ms()` reports a POPULATION sd, so a cell with one surviving seed has sigma = 0.0 and the rule
+    "|delta| < pooled sigma => TIE" would call every difference decisive. The rule is pre-registered
+    and is not modified; instead a comparison whose either side is not a full 3-seed cell is
+    WITHHELD. A withheld comparison carries no verdict and must be reported as `n=k WITHHELD`.
+    """
     d = ma - mb
     p = pooled_sigma(sa, sb)
+    if na != N_SEEDS_REQUIRED or nb != N_SEEDS_REQUIRED:
+        return f"WITHHELD_N(na={na},nb={nb})", d, p
     if abs(d) < p:
         return "TIE", d, p
     return ("GT" if d > 0 else "LT"), d, p
@@ -76,6 +88,8 @@ def ms(vals):
     if not vals:
         return None, None, 0
     if len(vals) == 1:
+        # sigma is UNDEFINED for one sample. 0.0 is kept only so the JSON stays the same shape --
+        # `n` is what callers must gate on, see classify()'s WITHHELD_N branch.
         return vals[0], 0.0, 1
     return st.mean(vals), st.pstdev(vals), len(vals)
 
@@ -147,7 +161,7 @@ def main():
         if None in (ma, mb):
             g1b[f"{k}:{a}-{b}"] = {"pass": False, "reason": "missing"}
             continue
-        cls, d, p = classify(ma, sa, mb, sb)
+        cls, d, p = classify(ma, sa, mb, sb, summ[a]["mae"][k]["n"], summ[b]["mae"][k]["n"])
         g1b[f"{k}:{a}-{b}"] = {"e144_class": e144cls, "e145_best_class": cls,
                                "delta": round(d, 4), "pooled_sigma": round(p, 4),
                                "pass": cls != "LT"}
@@ -190,7 +204,8 @@ def main():
             if None in (ma, mb):
                 pairs[f"{k}:{a}-{b}"] = {"class": "MISSING"}
                 continue
-            cls, d, p = classify(ma, sa, mb, sb)
+            cls, d, p = classify(ma, sa, mb, sb,
+                                 summ[a]["own"][k]["n"], summ[b]["own"][k]["n"])
             pairs[f"{k}:{a}-{b}"] = {"e144_class": E144_CLASS[(k, a, b)], "e145_own_class": cls,
                                      "delta": round(d, 4), "pooled_sigma": round(p, 4)}
     any_flip = any(v.get("e145_own_class") == "LT" for v in pairs.values())

@@ -44,6 +44,9 @@ def pooled_sigma(sa, sb):
     return math.sqrt((sa * sa + sb * sb) / 2.0)
 
 
+N_SEEDS_REQUIRED = 3
+
+
 def sd(xs):
     return float(np.std(np.asarray(xs, dtype=float), ddof=0))   # population sd, as in E143
 
@@ -69,8 +72,21 @@ def rank(means):
     return tuple(sorted(means, key=lambda a: -means[a]))
 
 
-def order_report(label, means, sds, ref_order):
+def order_report(label, means, sds, ref_order, ns=None):
+    """PREREG ordering rule, UNCHANGED, plus an n != 3 gatekeeper.
+
+    `sd()` is a POPULATION sd, so an arm with one surviving seed has sigma = 0.0 and the "|delta| <
+    pooled sigma => TIE" test can never fire for it. The rule is pre-registered and is not modified;
+    instead, if any arm in this ordering is not a full 3-seed cell the ordering is WITHHELD.
+    """
     got = rank(means)
+    withheld = [] if ns is None else [a for a in got if ns.get(a) != N_SEEDS_REQUIRED]
+    if withheld:
+        print(f"{label}: WITHHELD -- arms with n != {N_SEEDS_REQUIRED}: "
+              + ", ".join(f"{a} n={ns.get(a)}" for a in withheld))
+        return {"order": list(got), "ref_order": list(ref_order), "changed": None,
+                "ties": [], "tie_explained": None,
+                "WITHHELD_N": {a: ns.get(a) for a in withheld}}
     ties = []
     for a, b in zip(got, got[1:]):
         ps = pooled_sigma(sds[a], sds[b])
@@ -145,6 +161,7 @@ def main():
     print()
 
     means, sds, meansF, sdsF, summary = {}, {}, {}, {}, {}
+    nseeds = {}
     print("## arm summary (mean ± population σ over seeds), and 40ep deltas")
     for arm in ARMS:
         rs = rows.get(arm, [])
@@ -155,6 +172,7 @@ def main():
         F = [r["F"] for r in rs]
         means[arm], sds[arm] = float(np.mean(O)), sd(O)
         meansF[arm], sdsF[arm] = float(np.mean(F)), sd(F)
+        nseeds[arm] = len(O)                      # n != 3 gatekeeper input
         ref = REF40[arm]
         binm = {b: (float(np.mean([r["bins"][b] for r in rs])), sd([r["bins"][b] for r in rs])) for b in BINS}
         maes = [r["best_val_mae_m"] for r in rs if "best_val_mae_m" in r]
@@ -190,8 +208,8 @@ def main():
         oo = ff = None
     else:
         print("## pre-registered ordering test (PREREG sec. 3, pooled σ per addendum A3)")
-        oo = order_report("ORDER_O (overall F1)", means, sds, ORDER_O_40)
-        ff = order_report("ORDER_F (>4 m F1)", meansF, sdsF, ORDER_F_40)
+        oo = order_report("ORDER_O (overall F1)", means, sds, ORDER_O_40, nseeds)
+        ff = order_report("ORDER_F (>4 m F1)", meansF, sdsF, ORDER_F_40, nseeds)
         print()
         f_top_ok = rank(meansF)[0] == "invfreq"
         hold = (not oo["changed"]) and f_top_ok

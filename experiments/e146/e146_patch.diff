@@ -1,0 +1,87 @@
+--- train_oaa_e145.py	2026-09-27 09:56:54.941985995 +0000
++++ train_oaa_e146.py	2026-09-27 10:00:44.573990933 +0000
+@@ -75,6 +75,41 @@
+ from core.metrics import cos_lat
+ from model.oaa import OAAv2Depth
+ 
++import importlib.util as _ilu                     # E146: load EchoRecon's erp.py by PATH
++
++# ---- E146: the loss-weight bin space ------------------------------------------------------------
++# The stored GT (data_0422._load_depth reads erp_depth/) is per-face cubemap z-depth (PLANAR).
++# e114_eval.py bins the RADIAL range: EchoRecon/src/erp.py to_radial(d, dirs, "face") = d / face_cos.
++# E143/E144/E145 fed the PLANAR metres straight into torch.bucketize, so the training bins and the
++# evaluation bins were different sets of pixels. E146 converts to radial before bucketize, so the
++# treated set and the measured set agree. `face_cos` is IMPORTED from EchoRecon, not reimplemented.
++#
++# Loaded by file path rather than sys.path.insert: EchoRecon/src also holds data.py / predict.py /
++# eval_fusion.py, and putting that directory on sys.path could shadow a hear360 module later in the
++# run. erp.py imports numpy only, so a path load is safe and has no side effects.
++_ERP_PATH = os.environ.get("ECHORECON_ERP",
++                           "/root/storage/implementation/shared_audio/EchoRecon/src/erp.py")
++_erp_spec = _ilu.spec_from_file_location("echorecon_erp", _ERP_PATH)
++_erp = _ilu.module_from_spec(_erp_spec)
++_erp_spec.loader.exec_module(_erp)
++_ray_dirs, _face_cos = _erp.ray_dirs, _erp.face_cos
++
++# e114_eval.py:82 builds dirs at the PREDICTION resolution with convention "right0"; the trainer's
++# GT tensor is 256x512 (data_0422.H, data_0422.W), so this is the same grid the eval measures on.
++# face_cos is convention-invariant (max|diff| 4.4e-16 across all four CONVENTIONS) -- verified.
++ERP_CONV = os.environ.get("E146_ERP_CONV", "right0")
++_FC_CACHE = {}
++
++
++def face_cos_like(t):
++    """(1, 1, H, W) cos(ray, face-normal) on t's grid/device/dtype. radial = planar / face_cos."""
++    h, w = t.shape[-2], t.shape[-1]
++    key = (h, w, t.device, t.dtype)
++    if key not in _FC_CACHE:
++        fc = _face_cos(_ray_dirs(h, w, ERP_CONV))
++        _FC_CACHE[key] = torch.from_numpy(np.ascontiguousarray(fc)).to(t.device, t.dtype).view(1, 1, h, w)
++    return _FC_CACHE[key]
++
+ CUE_CH = {"none": 1, "ild": 2, "ipd": 3, "bin4": 4}   # channels per ear observation
+ 
+ 
+@@ -113,7 +148,9 @@
+ 
+ 
+ # ---- E114 loss reweighting, transplanted verbatim from train_oaa_e114.py ----
+-BIN_DIST_PATH = os.environ.get("E143_BIN_DIST", "/root/storage/e143_code/gate0_bin_dist.json")
++# E146: the invfreq weights must be counted in the SAME space the bins are now computed in,
++# otherwise the treatment (radial bins) and the weights (planar histogram) disagree.
++BIN_DIST_PATH = os.environ.get("E143_BIN_DIST", "/root/storage/e146_code/gate0_bin_dist_radial.json")
+ 
+ 
+ def load_weight_fn(kind: str, device):
+@@ -168,8 +205,10 @@
+         m = b["mask"].to(device)
+         w = wlat * m
+         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
+-        # same clamp as the training loss: d_m = (gt * max_depth).clamp(0.05, max_depth)
+-        dw = weight_fn(gt.clamp(0.05, max_depth)) if weight_fn is not None else torch.ones_like(gt)
++        # same clamp AND same bin space as the E146 training loss:
++        #   d_m = (gt * max_depth / face_cos).clamp(0.05, max_depth)
++        dw = (weight_fn((gt / face_cos_like(gt)).clamp(0.05, max_depth))
++              if weight_fn is not None else torch.ones_like(gt))
+         wo = w * dw
+         otot += ((D - gt).abs() * wo).sum().item(); own += wo.sum().item()
+         wt = m * dw
+@@ -274,6 +313,7 @@
+                        no_pose_emb=a.no_pose_emb, no_ray_emb=a.no_ray_emb, no_geo_bias=a.no_geo_bias,
+                        no_tf_pe=a.no_tf_pe, no_cross=a.no_cross).to(device)
+     if is_main:
++        print(f"[E146] bin_space=radial erp_conv={ERP_CONV} bin_dist={BIN_DIST_PATH}", flush=True)
+         print(f"[E143] cue={a.cue} loss_weight={a.loss_weight} in_ch={a.in_ch} spec_ch={a.nviews * a.in_ch} "
+               f"scale_ild={getattr(_DM, 'SCALE_ILD', None)} scale_ipd={getattr(_DM, 'SCALE_IPD', None)} "
+               f"data_module={os.environ.get('DATA_MODULE')}", flush=True)
+@@ -348,7 +388,9 @@
+                 spec_in = spec_in.clone(); spec_in[:, idx] = 0
+             with torch.autocast("cuda", dtype=torch.bfloat16):
+                 D = model(spec_in, view_poses=vp_in)
+-            d_m = (gt.float() * a.max_depth).clamp(0.05, a.max_depth)   # E114: real-metre range for weighting
++            # E146: bin on RADIAL metres (what e114_eval.py measures), not planar cubemap z-depth.
++            # The loss TARGET below is still planar `gt` -- only the per-pixel weight moves.
++            d_m = (gt.float() * a.max_depth / face_cos_like(gt)).clamp(0.05, a.max_depth)
+             wgt = weight_fn(d_m) * mask
+             loss = ((D.float() - gt).abs() * wgt).sum() / wgt.sum().clamp(min=1e-6)   # E114: distance-weighted masked L1
+             (loss / accum).backward()                                  # accumulate grads over `accum` micro-batches
