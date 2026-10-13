@@ -17,8 +17,8 @@ import numpy as np
 import torch
 
 from core.data import get_data_module
-from core.metrics import cos_lat
-from model.oaa import OAAv2Depth
+from core.metrics import cos_lat, depth_loss
+from model.oaa import OAAv2Depth, VIEW_FUSIONS
 
 _DM = get_data_module()          # DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
 loader = _DM.loader
@@ -68,6 +68,13 @@ def main():
     p.add_argument("--no-geo-bias", action="store_true")
     p.add_argument("--no-tf-pe", action="store_true")
     p.add_argument("--no-cross", action="store_true")      # baseline (a): no ray-observation cross-attention
+    # attention / fusion / loss / masking variants (all default-off => reference recipe)
+    p.add_argument("--qk-norm", action="store_true")       # E1: RMS-normalised ray-cross Q/K + learnable head scales
+    p.add_argument("--ray-gate", action="store_true")      # E2: identity-initialised per-(ray,head) output gate
+    p.add_argument("--view-fusion", default="global", choices=list(VIEW_FUSIONS))   # E4
+    p.add_argument("--depth-loss", default="plain", choices=["plain", "spherical"])  # E5
+    p.add_argument("--explicit-obs-mask", action="store_true")   # E6: true masking instead of zeroed spectrograms
+    p.add_argument("--dump-attn-stats", action="store_true")     # diagnostics only, never feeds the loss
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=16)
@@ -116,12 +123,25 @@ def main():
     elif a.ear_blind:
         vp = [(y, 1.0) for (y, e) in (vp or [])] or None
 
+    if a.explicit_obs_mask and not a.subset_aug:
+        print("[warn] --explicit-obs-mask without --subset-aug: every observation is always valid, "
+              "so the mask is all-ones and training is identical to the reference recipe", flush=True)
     model = OAAv2Depth(C=a.dim, nviews=a.nviews, rounds=a.rounds, lh=a.lift_h, lw=a.lift_w,
                        stem_stride1=a.stem_stride1, max_depth=a.max_depth,
                        no_pose_emb=a.no_pose_emb, no_ray_emb=a.no_ray_emb, no_geo_bias=a.no_geo_bias,
-                       no_tf_pe=a.no_tf_pe, no_cross=a.no_cross).to(device)
+                       no_tf_pe=a.no_tf_pe, no_cross=a.no_cross,
+                       qk_norm=a.qk_norm, ray_gate=a.ray_gate, view_fusion=a.view_fusion).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
+        _sh = lambda c: (__import__("subprocess").run(c, shell=True, capture_output=True, text=True).stdout.strip() or None)
+        json.dump({"args": vars(a), "params_m": sum(x.numel() for x in model.parameters()) / 1e6,
+                   "git_sha": _sh("git rev-parse HEAD"), "git_dirty": _sh("git status --short"),
+                   "git_diff": _sh("git diff"), "data_module": a.data_module, "dmode": dmode,
+                   "view_poses": vp, "split_sizes": {"train": len(tr.dataset), "val": len(va.dataset)},
+                   "torch": torch.__version__, "cuda": torch.version.cuda,
+                   "gpu": torch.cuda.get_device_name(device) if torch.cuda.is_available() else None,
+                   "steps_per_ep_note": "filled after the scheduler is built"},
+                  open(os.path.join(rd, "manifest.json"), "w"), indent=2, default=str)
     raw_model = model
     if ddp:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[int(os.environ["LOCAL_RANK"])],
@@ -164,7 +184,7 @@ def main():
         for i, b in enumerate(tr):
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
-            vp_in, spec_in = vp, spec
+            vp_in, spec_in, ov_in = vp, spec, None
             _vp = a.vdrop_p * min(1.0, max(0.0, (ep - a.vdrop_start + 1) / max(1, a.vdrop_ramp)))
             if a.subset_aug and random.random() < _vp:          # observation-token masking (curriculum ramp)
                 # never zero every observation: k < nviews
@@ -173,11 +193,22 @@ def main():
                 k = random.choice(_pool)
                 idx = random.sample(range(spec_in.shape[1]), k)
                 spec_in = spec_in.clone(); spec_in[:, idx] = 0
+                if a.explicit_obs_mask:
+                    # (B,N) even though this dropout is per-batch, so the model API is already
+                    # per-sample for a future per-sample curriculum. view_poses stay untouched:
+                    # removing entries would break the fixed view indexing and the ckpt contract.
+                    ov_in = torch.ones(spec_in.shape[0], a.nviews, dtype=torch.bool, device=device)
+                    ov_in[:, idx] = False
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                D = model(spec_in, view_poses=vp_in)
-            loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)   # masked L1, nothing else
-            (loss / accum).backward()                                  # accumulate grads over `accum` micro-batches
-            run += float(loss.detach()); nb += 1
+                D = model(spec_in, view_poses=vp_in, obs_valid=ov_in)
+            loss = depth_loss(D, gt, mask, a.depth_loss, wlat)
+            if loss is None:                                           # no weighted-valid pixel anywhere
+                # drop this micro-batch's gradient but keep the step cadence, so --accum still
+                # defines the effective batch and the LR schedule stays on its pre-registered horizon
+                print(f"[skip] ep{ep} batch{i}: empty depth mask, micro-batch dropped", flush=True)
+            else:
+                (loss / accum).backward()                              # accumulate grads over `accum` micro-batches
+                run += float(loss.detach()); nb += 1
             if (i + 1) % accum == 0 or (i + 1) == nbatch:              # optimizer step per effective batch
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step(); sched.step(); opt.zero_grad()
@@ -188,9 +219,16 @@ def main():
                         q.copy_(w)
         run /= max(nb, 1)
         if is_main:
+            if a.dump_attn_stats and not a.no_cross:
+                ema.ray_mic.collect_stats = True        # sampled during val only; cannot touch training
             vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
             hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
             print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m", flush=True)
+            if a.dump_attn_stats and not a.no_cross:
+                ema.ray_mic.collect_stats = False
+                _st = {k: (v.tolist() if torch.is_tensor(v) else v) for k, v in ema.ray_mic.stats.items()}
+                with open(os.path.join(rd, "attn_stats.jsonl"), "a") as _f:
+                    _f.write(json.dumps({"epoch": ep, **_st}) + "\n")
             if vmae < best:
                 best = vmae
                 torch.save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, "best.pth"))

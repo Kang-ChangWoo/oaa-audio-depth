@@ -70,7 +70,11 @@ def build(args, DM):
                    lh=args.get("lift_h", 16) if wired else 16, lw=args.get("lift_w", 32) if wired else 32,
                    no_pose_emb=args.get("no_pose_emb", False) or False, no_ray_emb=args.get("no_ray_emb", False) or False,
                    no_geo_bias=args.get("no_geo_bias", False) or False, no_tf_pe=args.get("no_tf_pe", False) or False,
-                   no_cross=args.get("no_cross", False) or False)
+                   no_cross=args.get("no_cross", False) or False,
+                   # attention/fusion variants; absent in every pre-2026-10-13 checkpoint, and the
+                   # defaults below are exactly the reference model, so old args rebuild unchanged
+                   qk_norm=args.get("qk_norm", False) or False, ray_gate=args.get("ray_gate", False) or False,
+                   view_fusion=args.get("view_fusion") or "global")
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

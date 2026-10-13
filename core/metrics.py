@@ -13,6 +13,28 @@ def cos_lat(h, device):
     return torch.cos((math.pi / 2) - (v + 0.5) / h * math.pi).clamp(min=1e-3)
 
 
+def depth_loss(D, gt, mask, kind, wlat):
+    """Training objective on NORMALISED depth (metres only for reporting: multiply by max_depth).
+
+    `plain`     the reference masked L1, pooled over every valid pixel in the batch at once.
+    `spherical` cos-latitude-weighted L1 normalised PER IMAGE first, then averaged over the batch --
+                the same aggregation the reported MAE uses (`MetricAccumulator`), unlike `plain`
+                and unlike `train_oaa.quick_val`, which both pool globally.
+
+    Returns None when not one sample in the batch has a single weighted-valid pixel, so the caller
+    can drop the micro-batch instead of stepping the optimizer on a NaN.
+    """
+    if kind == "plain":
+        return ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
+    w = mask.float() * wlat
+    num = ((D.float() - gt.float()).abs() * w).flatten(1).sum(1)
+    den = w.flatten(1).sum(1)
+    valid = den > 0
+    if not bool(valid.any()):
+        return None
+    return (num[valid] / den[valid].clamp_min(1e-6)).mean()
+
+
 class MetricAccumulator:
     """acc = MetricAccumulator(device); acc.update(D, gt, mask) per batch; acc.result() -> dict (KEYS + bands)."""
 
