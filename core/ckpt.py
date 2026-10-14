@@ -74,7 +74,16 @@ def build(args, DM):
                    # attention/fusion variants; absent in every pre-2026-10-13 checkpoint, and the
                    # defaults below are exactly the reference model, so old args rebuild unchanged
                    qk_norm=args.get("qk_norm", False) or False, ray_gate=args.get("ray_gate", False) or False,
-                   view_fusion=args.get("view_fusion") or "global")
+                   view_fusion=args.get("view_fusion") or "global",
+                   # parameter-level tuning of those variants. Absent in every earlier checkpoint;
+                   # the defaults below are exactly the reference model.
+                   logit_scale_init=args.get("logit_scale_init", 0.0) or 0.0,
+                   geo_scale_init=args.get("geo_scale_init", 0.0) or 0.0,
+                   ray_gate_mode=args.get("ray_gate_mode") or "scalar",
+                   ray_gate_init=args.get("ray_gate_init", 0.0) or 0.0,
+                   fine_skip_init=args.get("fine_skip_init", 0.0) or 0.0,
+                   # decoder seam handling; absent in every earlier checkpoint -> reference zero padding
+                   erp_circular=args.get("erp_circular", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

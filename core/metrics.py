@@ -13,26 +13,36 @@ def cos_lat(h, device):
     return torch.cos((math.pi / 2) - (v + 0.5) / h * math.pi).clamp(min=1e-3)
 
 
-def depth_loss(D, gt, mask, kind, wlat):
+def depth_loss(D, gt, mask, kind, wlat, aux_l2=0.0):
     """Training objective on NORMALISED depth (metres only for reporting: multiply by max_depth).
 
     `plain`     the reference masked L1, pooled over every valid pixel in the batch at once.
     `spherical` cos-latitude-weighted L1 normalised PER IMAGE first, then averaged over the batch --
                 the same aggregation the reported MAE uses (`MetricAccumulator`), unlike `plain`
                 and unlike `train_oaa.quick_val`, which both pool globally.
+    `aux_l2`    weight of an ADDITIVE masked mean-squared term on the same normalised depth.
+                0.0 (default) leaves the objective exactly the reference L1, op for op. The L1 stays
+                the objective: L1's minimiser is the conditional median, while RMSE -- the one paper
+                metric lost at 2 observations -- is minimised by the conditional mean. The squared
+                term's per-pixel gradient is 2*aux_l2*|r|, which for |r| <= 0.05 (<= 0.5 m) is at
+                most 0.1*aux_l2 against L1's 1, so it only engages on the large far-field residuals.
 
     Returns None when not one sample in the batch has a single weighted-valid pixel, so the caller
     can drop the micro-batch instead of stepping the optimizer on a NaN.
     """
     if kind == "plain":
-        return ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
-    w = mask.float() * wlat
-    num = ((D.float() - gt.float()).abs() * w).flatten(1).sum(1)
-    den = w.flatten(1).sum(1)
-    valid = den > 0
-    if not bool(valid.any()):
-        return None
-    return (num[valid] / den[valid].clamp_min(1e-6)).mean()
+        loss = ((D.float() - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
+    else:
+        w = mask.float() * wlat
+        num = ((D.float() - gt.float()).abs() * w).flatten(1).sum(1)
+        den = w.flatten(1).sum(1)
+        valid = den > 0
+        if not bool(valid.any()):
+            return None
+        loss = (num[valid] / den[valid].clamp_min(1e-6)).mean()
+    if aux_l2 > 0:
+        loss = loss + aux_l2 * (((D.float() - gt) ** 2) * mask).sum() / mask.sum().clamp(min=1e-6)
+    return loss
 
 
 class MetricAccumulator:

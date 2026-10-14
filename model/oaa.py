@@ -26,6 +26,11 @@ strict=True):
 Optional runtime argument (no parameters, no effect when omitted):
   forward(..., obs_valid=(B,N) bool)   explicit observation-validity masking of the inter-observation
                keys, the ray-cross keys/values and the fine-lift mean.
+Decoder / target-side switches (construction-time or trainer-side, default off => reference model):
+  erp_circular  decoder convs wrap the azimuth axis (ERP seam) instead of zero-padding it; no new
+                parameters, identical state_dict keys
+  yaw_roll_target(...)  trainer helper: roll the ERP target by k columns and shift the declared
+                receiver yaws by the same angle (exact symmetry; used by train_oaa --yaw-roll-aug)
 """
 import math
 import torch
@@ -35,6 +40,15 @@ import torch.nn.functional as F
 LH, LW = 16, 32                      # panoramic query grid (elevation x azimuth)
 
 VIEW_FUSIONS = ("global", "hier", "hier-geo")
+RAY_GATE_MODES = ("scalar", "channel")
+# parameters that are deliberately initialised at zero/identity. They all share one measured
+# symptom: after 40 epochs they have barely left their initial value (logit_scale 3-11 %,
+# fine_to_dec RMS 0.0057 against the decoder's own 0.0173). `--param-lr-mult` gives exactly this
+# set a different learning rate, which tests whether they are LR-starved rather than useless.
+IDENTITY_INIT_PARAM_SUFFIXES = ("ray_mic.logit_scale", "ray_mic.geo_scale",
+                                "ray_mic.gate_proj.weight", "ray_mic.gate_proj.bias",
+                                "ray_mic.route_mlp.2.weight", "ray_mic.route_mlp.2.bias",
+                                "fine_to_dec.weight", "fine_to_dec.bias")
 _QK_LOGSCALE_CLIP = 4.0              # exp() multiplier bounded to [1.8e-2, 5.5e1]
 _QK_EPS = 1e-6
 # Tests flip this to False to exercise the masked code path on all-valid input; in production the
@@ -94,12 +108,37 @@ def _norm(co, kind):
     return nn.GroupNorm(8, co) if kind == "group" else nn.BatchNorm2d(co)
 
 
+def _padw(x):
+    """Wrap one column on each side: azimuth -pi and +pi are the same direction on an ERP map."""
+    return F.pad(x, (1, 1, 0, 0), mode="circular")
+
+
+class _CircConv2d(nn.Conv2d):
+    """3x3 conv whose azimuth (W) padding is circular and whose elevation (H) padding stays zero.
+    Subclass, not wrapper: the state_dict keys are exactly those of the plain nn.Conv2d."""
+    def __init__(self, ci, co, k, s=1, p=1):
+        super().__init__(ci, co, k, s, (p, 0))
+
+    def forward(self, x):
+        return super().forward(_padw(x))
+
+
+class _CircConvT2d(nn.ConvTranspose2d):
+    """ConvTranspose2d(4, 2, 1) with a circular azimuth axis: wrap the input by one column, run the
+    transposed conv, and drop the two output columns that each wrapped column produced. Tap-for-tap
+    the same weights reach the same outputs as the zero-padded version, except that output columns at
+    the seam now also see their true neighbours across the wrap."""
+    def forward(self, x):
+        return super().forward(_padw(x))[..., 2:-2]
+
+
 class _ResBlk(nn.Module):
-    def __init__(self, ci, co, down=True, norm="group"):
+    def __init__(self, ci, co, down=True, norm="group", circular=False):
         super().__init__()
         s = 2 if down else 1
-        self.c1 = nn.Conv2d(ci, co, 3, s, 1); self.n1 = _norm(co, norm)
-        self.c2 = nn.Conv2d(co, co, 3, 1, 1); self.n2 = _norm(co, norm)
+        conv = _CircConv2d if circular else nn.Conv2d
+        self.c1 = conv(ci, co, 3, s, 1); self.n1 = _norm(co, norm)
+        self.c2 = conv(co, co, 3, 1, 1); self.n2 = _norm(co, norm)
         self.sc = nn.Conv2d(ci, co, 1, s, 0) if (ci != co or down) else nn.Identity()
 
     def forward(self, x):
@@ -199,9 +238,11 @@ class RayMicAttn(nn.Module):
     observation) bias from [R_i^T r_j (3), ray . ear_axis (1), ear_sign (1)] is added to the logits before
     softmax. LN + residual + FFN."""
     def __init__(self, C, heads=8, use_bias=True, qk_norm=False, ray_gate=False,
-                 view_fusion="global"):
+                 view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
+                 ray_gate_mode="scalar", ray_gate_init=0.0):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
+        assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
         self.h, self.dk = heads, C // heads
         self.use_bias = use_bias          # False = "w/o geometric bias" ablation (content-only QK)
         self.nq = nn.LayerNorm(C); self.nk = nn.LayerNorm(C)
@@ -211,12 +252,20 @@ class RayMicAttn(nn.Module):
         # ---- variants. Each one declares parameters ONLY when it is on, so the default model's
         # state_dict is byte-for-byte the reference one and old checkpoints load with strict=True.
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
+        self.ray_gate_mode = ray_gate_mode
         if qk_norm:
-            self.logit_scale = nn.Parameter(torch.zeros(heads))   # log-scale, init 0 -> multiplier 1
-            self.geo_scale = nn.Parameter(torch.zeros(heads))
+            # log-scales. init 0 -> multiplier exactly 1 -> output identical to the no-qk-norm path.
+            # The measured problem these inits address: after 40 epochs these parameters move only
+            # 3-11 %, so whatever they are initialised to is effectively where they stay.
+            self.logit_scale = nn.Parameter(torch.full((heads,), float(logit_scale_init)))
+            self.geo_scale = nn.Parameter(torch.full((heads,), float(geo_scale_init)))
         if ray_gate:
-            self.gate_proj = nn.Linear(C, heads)                  # 2*sigmoid(0) = 1 -> identity at init
-            nn.init.zeros_(self.gate_proj.weight); nn.init.zeros_(self.gate_proj.bias)
+            # scalar: one gate per (ray, head). channel: one gate per (ray, channel), the spec's
+            # named follow-up. 2*sigmoid(bias) is the gate value at init, so bias 0 -> exactly 1.
+            n_out = heads if ray_gate_mode == "scalar" else C
+            self.gate_proj = nn.Linear(C, n_out)
+            nn.init.zeros_(self.gate_proj.weight)
+            nn.init.constant_(self.gate_proj.bias, float(ray_gate_init))
         if view_fusion == "hier-geo":
             self.route_mlp = nn.Sequential(nn.Linear(5, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
@@ -318,8 +367,12 @@ class RayMicAttn(nn.Module):
         else:
             out_head = self._hier_fuse(logits, V, N, M, feats, kv_keep)
         if self.ray_gate:
-            gate = 2.0 * torch.sigmoid(self.gate_proj(q_ln))               # (B,R,h) in (0,2), =1 at init
-            out_head = out_head * gate.permute(0, 2, 1).unsqueeze(-1)
+            gate = 2.0 * torch.sigmoid(self.gate_proj(q_ln))               # in (0,2); =1 at bias 0
+            if self.ray_gate_mode == "scalar":
+                g = gate.permute(0, 2, 1).unsqueeze(-1)                    # (B,R,h)  -> (B,h,R,1)
+            else:
+                g = gate.view(B, R, self.h, self.dk).transpose(1, 2)       # (B,R,C)  -> (B,h,R,dk)
+            out_head = out_head * g
             if self.collect_stats:
                 with torch.no_grad():
                     g = gate.detach().float()
@@ -344,17 +397,32 @@ class RayMicAttn(nn.Module):
         return h + self.ffn(h)
 
 
-def _make_up(C, norm, lh, lw, deep=True):
-    """Decoder stages (lh,lw) -> (256,512), #stages = log2(256/lh); returns (ModuleList, per-stage out channels)."""
+def _make_up(C, norm, lh, lw, deep=True, circular=False):
+    """Decoder stages (lh,lw) -> (256,512), #stages = log2(256/lh); returns (ModuleList, per-stage out channels).
+    circular=True wraps the azimuth axis in every decoder conv (same parameters, same keys)."""
     stages = int(round(math.log2(256 / lh)))
     assert 256 % lh == 0 and 512 % lw == 0 and (256 // lh) == (512 // lw), f"bad grid {lh}x{lw}"
     chans = [C, 128, 64, 32, 16, 16, 16][:stages + 1]
+    convT = _CircConvT2d if circular else nn.ConvTranspose2d
 
     def up(ci, co):
-        blks = [nn.ConvTranspose2d(ci, co, 4, 2, 1), _norm(co, norm), nn.GELU(), _ResBlk(co, co, down=False, norm=norm)]
-        if deep: blks.append(_ResBlk(co, co, down=False, norm=norm))
+        blks = [convT(ci, co, 4, 2, 1), _norm(co, norm), nn.GELU(), _ResBlk(co, co, down=False, norm=norm, circular=circular)]
+        if deep: blks.append(_ResBlk(co, co, down=False, norm=norm, circular=circular))
         return nn.Sequential(*blks)
     return nn.ModuleList([up(chans[i], chans[i + 1]) for i in range(stages)]), chans[1:stages + 1]
+
+
+def yaw_roll_target(gt, mask, poses, k, width=512):
+    """Exact yaw symmetry of the ERP target: declaring every receiver `2*pi*k/width` further round
+    (counter-clockwise, in the model's +A convention) is the same physical scene with the panoramic
+    depth map rolled by +k columns. torch.roll(+k) moves column c to c+k, and `_fine_lift` rolls a
+    receiver's own frame by +round(yaw/(2pi)*2lw) to reach the global frame, so both use the same sign.
+    k=0 returns the inputs untouched. The audio is not changed: the same recording, re-labelled."""
+    if k == 0:
+        return gt, mask, poses
+    dyaw = 2 * math.pi * k / width
+    return (torch.roll(gt, k, dims=-1), torch.roll(mask, k, dims=-1),
+            [(float(y) + dyaw, float(e)) for y, e in poses])
 
 
 class OAAv2Depth(nn.Module):
@@ -362,8 +430,15 @@ class OAAv2Depth(nn.Module):
     def __init__(self, C=256, rounds=2, in_ch=1, norm="group", lh=LH, lw=LW, dec_deep=True,
                  enc_res=(256, 512), nviews=4, stem_stride1=False, max_depth=10.0,
                  no_pose_emb=False, no_ray_emb=False, no_geo_bias=False, no_tf_pe=False, no_cross=False,
-                 qk_norm=False, ray_gate=False, view_fusion="global"):
+                 qk_norm=False, ray_gate=False, view_fusion="global",
+                 logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
+                 ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False):
         super().__init__()
+        # erp_circular: the decoder convs (ConvTranspose2d, both ResBlk 3x3 convs per stage, head)
+        # wrap the azimuth axis instead of zero-padding it. ERP columns 0 and 511 are adjacent
+        # directions (behind the listener); zero padding tells the decoder they are image borders.
+        # No new parameters, identical state_dict keys; False reproduces the reference exactly.
+        self.erp_circular = erp_circular
         # the attention/fusion variants all live inside RayMicAttn, which --no-cross removes entirely
         if no_cross:
             assert not (qk_norm or ray_gate or view_fusion != "global"), (
@@ -403,22 +478,32 @@ class OAAv2Depth(nn.Module):
             self.view_pose = [(2 * math.pi * (j // 2) / k, (-1.0, 1.0)[j % 2]) for j in range(nviews)]
         self.register_buffer("dir6_buf", _dir_pe(lh, lw, torch.device("cpu")), persistent=False)
         # multi-scale decoder: stage-0 upsample (lh,lw)->(2lh,2lw) + fine ray-lift skip, then remaining stages
-        self.up_stages, up_ch = _make_up(C, norm, lh, lw, deep=dec_deep)
+        self.up_stages, up_ch = _make_up(C, norm, lh, lw, deep=dec_deep, circular=erp_circular)
         self.fine_in = nn.Linear(self.enc.fine_ch, C)
         self.fine_q = nn.Parameter(torch.randn(1, 4 * self.M, C) * 0.02)
         self.fine_tf_pe = nn.Parameter(torch.zeros(1, 4 * self.M, C))
         self.fine_dir_mlp = nn.Sequential(nn.Linear(6, C), nn.GELU(), nn.Linear(C, C))
         self.fine_ln = nn.LayerNorm(C)
         self.fine_lift = nn.MultiheadAttention(C, 8, batch_first=True)
-        self.fine_to_dec = nn.Conv2d(C, up_ch[0], 1)                    # zero-init: starts with no injection
-        nn.init.zeros_(self.fine_to_dec.weight); nn.init.zeros_(self.fine_to_dec.bias)
+        # zero-init by default: the fine ray-lift skip starts with no injection and has to learn its
+        # way in. Measured after 40 epochs: weight RMS 0.0057 against the decoder's own first conv
+        # at 0.0173, i.e. the only high-resolution path stays nearly dead. fine_skip_init > 0 gives
+        # it a non-zero start instead; 0.0 reproduces the reference exactly.
+        self.fine_to_dec = nn.Conv2d(C, up_ch[0], 1)
+        nn.init.zeros_(self.fine_to_dec.bias)
+        if float(fine_skip_init) > 0:
+            nn.init.normal_(self.fine_to_dec.weight, std=float(fine_skip_init))
+        else:
+            nn.init.zeros_(self.fine_to_dec.weight)
         self.register_buffer("fine_dir6_buf", _dir_pe(2 * lh, 2 * lw, torch.device("cpu")), persistent=False)
-        self.head = nn.Conv2d(up_ch[-1], 1, 3, padding=1)
+        self.head = _CircConv2d(up_ch[-1], 1, 3) if erp_circular else nn.Conv2d(up_ch[-1], 1, 3, padding=1)
         # fusion
         self.intra = nn.ModuleList([CondSelfAttn(C) for _ in range(rounds)])
         self.inter = nn.ModuleList([InterMicAttn(C) for _ in range(rounds)])
         self.ray_mic = RayMicAttn(C, use_bias=not no_geo_bias, qk_norm=qk_norm,
-                                  ray_gate=ray_gate, view_fusion=view_fusion)
+                                  ray_gate=ray_gate, view_fusion=view_fusion,
+                                  logit_scale_init=logit_scale_init, geo_scale_init=geo_scale_init,
+                                  ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init)
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):

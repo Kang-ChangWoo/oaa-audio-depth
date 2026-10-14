@@ -188,14 +188,26 @@ def main():
               f"mem={torch.cuda.max_memory_allocated()/2**30:.1f}G", flush=True)
         if vmae < best:
             best = vmae
-            torch.save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, "best.pth"))
-        torch.save({"state_dict": ema.state_dict(), "raw_state": model.state_dict(),
-                    "opt": opt.state_dict(), "sched_last_epoch": sched.last_epoch,
-                    "next_epoch": ep + 1, "args": vars(a)}, os.path.join(rd, "last.pth"))
+            _atomic_save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, "best.pth"))
+        _atomic_save({"state_dict": ema.state_dict(), "raw_state": model.state_dict(),
+                      "opt": opt.state_dict(), "sched_last_epoch": sched.last_epoch,
+                      "next_epoch": ep + 1, "args": vars(a)}, os.path.join(rd, "last.pth"))
     json.dump({"best_val_mae_m": best, "hist": hist, "args": vars(a)},
               open(os.path.join(rd, "train_done.json"), "w"), indent=2)
     print(f"[done] best val MAE={best:.4f}m -> {rd}", flush=True)
 
+
+
+def _atomic_save(obj, path):
+    """Write a checkpoint to <path>.tmp and rename it into place.
+
+    A direct torch.save() onto best.pth / last.pth leaves a truncated file if the process dies
+    partway through, and the leftover still loads far enough to look real. Same pattern as
+    train_echodiffusion.py (2026-10-07).
+    """
+    tmp = path + ".tmp"
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
 
 if __name__ == "__main__":
     main()
