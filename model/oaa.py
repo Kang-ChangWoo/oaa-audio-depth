@@ -23,6 +23,22 @@ strict=True):
   view_fusion  "global" (reference single softmax) | "hier" (exact two-stage decomposition of the
                same softmax, no new parameters) | "hier-geo" (hier + zero-initialised geometry
                routing residual on the outer logits, so it starts exactly at "hier")
+
+Architecture repairs (`archfix_` campaign, 2026-10-16; construction-time, default off => reference):
+  fine_layerscale  LayerScale (CaiT) on the fine decoder skip: `fine_to_dec` keeps nn.Conv2d's own
+               init and its output is multiplied by a learnable per-channel gamma initialised at
+               this value. Replaces the zero-init, whose gradient to the whole fine branch is
+               exactly W^T g = 0 at step 0. 0.0 = off (zero-init, the reference).
+  registers    RayMicAttn register tokens (Darcet et al.): `registers` learnable C-vectors appended
+               to the cross-attention keys/values, giving the softmax a place to put mass when no
+               acoustic token is worth attending to. 0 = off. "global" fusion only.
+  scene_registers  the registers additionally carry a pooled scene code,
+               `reg + scene_mlp(tokens.mean(over tokens))`, with `scene_mlp` zero-initialised so the
+               configuration starts exactly at plain `registers`. Requires registers > 0.
+  geo_basis    "raw" (reference: the 5 geometry numbers straight into `bias_mlp`) | "sh4" (the
+               rotated ray direction expanded in the real spherical harmonics of degree <= 4, 25
+               coefficients, plus the 2 remaining scalars => 27 inputs). A fixed basis: it adds no
+               parameters of its own, only the wider first `bias_mlp` layer.
 Optional runtime argument (no parameters, no effect when omitted):
   forward(..., obs_valid=(B,N) bool)   explicit observation-validity masking of the inter-observation
                keys, the ray-cross keys/values and the fine-lift mean.
@@ -41,19 +57,29 @@ LH, LW = 16, 32                      # panoramic query grid (elevation x azimuth
 
 VIEW_FUSIONS = ("global", "hier", "hier-geo")
 RAY_GATE_MODES = ("scalar", "channel")
+GEO_BASES = ("raw", "sh4")
+# geometry-bias input width per basis: raw = [R(-yaw)r (3), r.ear_axis*ear (1), ear (1)];
+# sh4 = the same with the 3 direction components replaced by 25 real SH coefficients.
+GEO_FEAT_DIM = {"raw": 5, "sh4": 27}
 # parameters that are deliberately initialised at zero/identity. They all share one measured
 # symptom: after 40 epochs they have barely left their initial value (logit_scale 3-11 %,
 # fine_to_dec RMS 0.0057 against the decoder's own 0.0173). `--param-lr-mult` gives exactly this
 # set a different learning rate, which tests whether they are LR-starved rather than useless.
+# `fine_ls` is deliberately NOT in this set: a LayerScale gamma is small but non-zero by design --
+# starting non-zero is the whole point of it -- so it is not LR-starved in the way these are.
 IDENTITY_INIT_PARAM_SUFFIXES = ("ray_mic.logit_scale", "ray_mic.geo_scale",
                                 "ray_mic.gate_proj.weight", "ray_mic.gate_proj.bias",
                                 "ray_mic.route_mlp.2.weight", "ray_mic.route_mlp.2.bias",
+                                "ray_mic.scene_mlp.weight", "ray_mic.scene_mlp.bias",
                                 "fine_to_dec.weight", "fine_to_dec.bias")
 _QK_LOGSCALE_CLIP = 4.0              # exp() multiplier bounded to [1.8e-2, 5.5e1]
 _QK_EPS = 1e-6
 # Tests flip this to False to exercise the masked code path on all-valid input; in production the
 # short-circuit is what makes "obs_valid all True" bit-identical to "obs_valid=None".
 _SHORTCIRCUIT_ALL_VALID = True
+# Tests flip this to True to drive every register logit to -inf, which is how "registers present but
+# unused must be bit-identical to no registers at all" is checked. Never set in production.
+_MASK_REGISTERS = False
 
 
 def _mask_engaged(obs_valid):
@@ -102,6 +128,58 @@ def _yaw_rot_inv(dir3, yaw):
     c, s = math.cos(yaw), math.sin(yaw)
     dx, dy, dz = dir3[..., 0], dir3[..., 1], dir3[..., 2]
     return torch.stack([dx * c - dz * s, dy, dx * s + dz * c], -1)
+
+
+# Real orthonormal spherical harmonics of degree <= 4 in Cartesian form, m = -l .. +l within each
+# degree. The degree-3/4 rows use x^2+y^2+z^2 = 1 to drop the radial factors, so this is the basis
+# *restricted to the unit sphere* -- which is exactly where it is evaluated: the rays come from
+# `_dir_pe` (unit by construction) and `_yaw_rot_inv` is a rotation. Fixed basis, no parameters.
+# Verified against scipy.special.sph_harm_y and for orthonormality in tests/test_oaa_arch_fixes.py.
+_SH_C0 = 0.28209479177387814
+_SH_C1 = 0.48860251190291987
+_SH_C2 = (1.0925484305920792, -1.0925484305920792, 0.31539156525252005,
+          -1.0925484305920792, 0.5462742152960396)
+_SH_C3 = (-0.5900435899266435, 2.890611442640554, -0.4570457994644658, 0.3731763325901154,
+          -0.4570457994644658, 1.445305721320277, -0.5900435899266435)
+_SH_C4 = (2.5033429417967046, -1.7701307697799304, 0.9461746957575601, -0.6690465435572892,
+          0.10578554691520431, -0.6690465435572892, 0.47308734787878004, -1.7701307697799304,
+          0.6258357354491761)
+_SH4_DIM = 25
+
+
+def _sh4_basis(v):
+    """Real SH up to degree 4 of unit vectors v (...,3) -> (...,25).
+
+    Why a fixed basis instead of more MLP capacity: `bias_mlp` is a 2-layer MLP being asked to learn
+    sin/cos-like angular functions from raw direction components, which is the spectral-bias failure
+    that positional encoding fixes in NeRF. Being fixed, it costs no parameters of its own.
+
+    Sign convention: these are the 3D-Gaussian-Splatting / plenoxels constants, which equal the
+    canonical real SH times (-1)^|m|. The factor is a gauge choice -- the `bias_mlp` Linear that
+    consumes this basis absorbs a per-column sign -- so span, orthonormality and the training
+    trajectory are unchanged. `tests/test_oaa_arch_fixes.py::_SH4_SIGN` states the convention and
+    checks it against scipy.
+    """
+    x, y, z = v[..., 0], v[..., 1], v[..., 2]
+    xx, yy, zz = x * x, y * y, z * z
+    xy, yz, xz = x * y, y * z, x * z
+    o = torch.ones_like(x)
+    return torch.stack([
+        _SH_C0 * o,                                                              # l=0
+        -_SH_C1 * y, _SH_C1 * z, -_SH_C1 * x,                                    # l=1
+        _SH_C2[0] * xy, _SH_C2[1] * yz, _SH_C2[2] * (2.0 * zz - xx - yy),
+        _SH_C2[3] * xz, _SH_C2[4] * (xx - yy),                                   # l=2
+        _SH_C3[0] * y * (3.0 * xx - yy), _SH_C3[1] * xy * z,
+        _SH_C3[2] * y * (4.0 * zz - xx - yy), _SH_C3[3] * z * (2.0 * zz - 3.0 * xx - 3.0 * yy),
+        _SH_C3[4] * x * (4.0 * zz - xx - yy), _SH_C3[5] * z * (xx - yy),
+        _SH_C3[6] * x * (xx - 3.0 * yy),                                         # l=3
+        _SH_C4[0] * xy * (xx - yy), _SH_C4[1] * yz * (3.0 * xx - yy),
+        _SH_C4[2] * xy * (7.0 * zz - 1.0), _SH_C4[3] * yz * (7.0 * zz - 3.0),
+        _SH_C4[4] * (35.0 * zz * zz - 30.0 * zz + 3.0),
+        _SH_C4[5] * xz * (7.0 * zz - 3.0), _SH_C4[6] * (xx - yy) * (7.0 * zz - 1.0),
+        _SH_C4[7] * xz * (xx - 3.0 * yy),
+        _SH_C4[8] * (xx * (xx - 3.0 * yy) - yy * (3.0 * xx - yy)),               # l=4
+    ], -1)
 
 
 def _norm(co, kind):
@@ -239,20 +317,48 @@ class RayMicAttn(nn.Module):
     softmax. LN + residual + FFN."""
     def __init__(self, C, heads=8, use_bias=True, qk_norm=False, ray_gate=False,
                  view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
-                 ray_gate_mode="scalar", ray_gate_init=0.0):
+                 ray_gate_mode="scalar", ray_gate_init=0.0,
+                 registers=0, scene_registers=False, geo_basis="raw"):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
+        assert geo_basis in GEO_BASES, f"geo_basis {geo_basis} not in {GEO_BASES}"
+        registers = int(registers)
+        assert registers >= 0, f"registers must be >= 0, got {registers}"
+        if scene_registers:
+            assert registers > 0, ("--scene-registers conditions the register tokens on a pooled "
+                                   "scene code, so it needs --registers > 0; refusing the "
+                                   "combination instead of silently doing nothing")
+        if registers:
+            # under "hier" the outer softmax is over observations and a register belongs to no
+            # observation, so there is no defined place to put it. Deliberately out of scope.
+            assert view_fusion == "global", (
+                f"--registers attaches to the single global softmax; view_fusion={view_fusion} "
+                f"decomposes the softmax over observations and a register belongs to no "
+                f"observation. Refusing the combination instead of guessing a semantics")
         self.h, self.dk = heads, C // heads
         self.use_bias = use_bias          # False = "w/o geometric bias" ablation (content-only QK)
         self.nq = nn.LayerNorm(C); self.nk = nn.LayerNorm(C)
         self.q = nn.Linear(C, C); self.k = nn.Linear(C, C); self.v = nn.Linear(C, C); self.o = nn.Linear(C, C)
-        self.bias_mlp = nn.Sequential(nn.Linear(5, 64), nn.GELU(), nn.Linear(64, heads))
+        self.geo_basis = geo_basis
+        gf = GEO_FEAT_DIM[geo_basis]
+        self.bias_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
         self.ffn = nn.Sequential(nn.LayerNorm(C), nn.Linear(C, 2 * C), nn.GELU(), nn.Linear(2 * C, C))
         # ---- variants. Each one declares parameters ONLY when it is on, so the default model's
         # state_dict is byte-for-byte the reference one and old checkpoints load with strict=True.
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
         self.ray_gate_mode = ray_gate_mode
+        self.registers, self.scene_registers = registers, bool(scene_registers)
+        self._pose_const = None           # (key, cos, sin, ear) cache; NOT state, see _pose_consts
+        if registers:
+            # same init as the panoramic queries. K/V reuse self.k / self.v, so the only new
+            # parameters are the tokens themselves: registers * C.
+            self.reg = nn.Parameter(torch.randn(1, registers, C) * 0.02)
+        if scene_registers:
+            # zero-initialised, so "scene-conditioned registers" starts EXACTLY at plain registers
+            # and the two cells differ only in what the optimiser is allowed to learn
+            self.scene_mlp = nn.Linear(C, C)
+            nn.init.zeros_(self.scene_mlp.weight); nn.init.zeros_(self.scene_mlp.bias)
         if qk_norm:
             # log-scales. init 0 -> multiplier exactly 1 -> output identical to the no-qk-norm path.
             # The measured problem these inits address: after 40 epochs these parameters move only
@@ -267,32 +373,85 @@ class RayMicAttn(nn.Module):
             nn.init.zeros_(self.gate_proj.weight)
             nn.init.constant_(self.gate_proj.bias, float(ray_gate_init))
         if view_fusion == "hier-geo":
-            self.route_mlp = nn.Sequential(nn.Linear(5, 64), nn.GELU(), nn.Linear(64, heads))
+            self.route_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
         self.collect_stats = False        # diagnostics only; never read by the loss
         self.stats = {}
 
+    def _pose_consts(self, poses, device, dtype):
+        """cos/sin of every yaw and every ear sign as (N,) tensors, cached on the pose list.
+
+        The reference built `torch.tensor([cos, 0, -sin])` inside a per-observation Python loop, i.e.
+        N host-to-device copies per forward (8 of them at 8 observations). PREREG called for a
+        registered buffer; a buffer cannot be used, because `poses` is a *forward-time* argument
+        (`view_poses=` overrides the construction-time list, and data_micgain passes the dataset's
+        own ordering), so the constants are cached keyed on the pose list instead. Not state: never
+        in state_dict, invalidated by any dtype/device/pose change.
+        """
+        key = (tuple((float(y), float(e)) for y, e in poses), str(device), dtype)
+        if self._pose_const is None or self._pose_const[0] != key:
+            t = lambda vals: torch.tensor(vals, device=device, dtype=dtype)
+            self._pose_const = (key,
+                                t([math.cos(float(y)) for y, _ in poses]),
+                                t([math.sin(float(y)) for y, _ in poses]),
+                                t([float(e) for _, e in poses]))
+        return self._pose_const[1:]
+
     def _geo_feats(self, ray_dir3, poses):
         """Per-observation geometry features [R(-yaw) r (3), r.ear_axis * ear (1), ear (1)].
 
-        Returned as the per-observation list the reference bias path already consumed, so that
-        `bias_mlp` sees exactly the same call shapes as before and the routing MLP can reuse the
-        features without recomputing them.
+        -> (R, N, 5), batched over observations. Bit-identical to the per-observation loop it
+        replaces, forward AND gradients (measured max|diff| = 0.0 at float32 and float64,
+        N = 2/4/8, gated by tests/test_oaa_arch_fixes.py); the ear-axis column needs no matmul at
+        all because
+        r . (R(yaw) x_hat) = dx cos(yaw) - dz sin(yaw) is literally the first component of
+        R(-yaw) r, which the rotation already computed.
+        dtype follows ray_dir3 so the module also runs in float64; at float32 (and under bf16
+        autocast, where ray_dir3 is the float32 dir buffer) these are the original float32 values.
         """
-        feats = []
-        for yaw, ear in poses:
-            local = _yaw_rot_inv(ray_dir3, yaw)
-            # dtype follows ray_dir3 so the module also runs in float64; at float32 (and under bf16
-            # autocast, where ray_dir3 is the float32 dir buffer) this is the original float32 tensor
-            a = torch.tensor([math.cos(yaw), 0.0, -math.sin(yaw)],
-                             device=ray_dir3.device, dtype=ray_dir3.dtype)   # ear axis R(yaw)@x_hat
-            c = (ray_dir3 @ a).unsqueeze(-1) * ear
-            e = torch.full_like(c, float(ear))
-            feats.append(torch.cat([local, c, e], -1))                     # (R,5)
-        return feats
+        cs, ss, ea = self._pose_consts(poses, ray_dir3.device, ray_dir3.dtype)
+        dx, dy, dz = ray_dir3[..., 0:1], ray_dir3[..., 1:2], ray_dir3[..., 2:3]      # (R,1)
+        lx = dx * cs - dz * ss                                                        # (R,N)
+        lz = dx * ss + dz * cs
+        ly = dy.expand_as(lx)
+        return torch.stack([lx, ly, lz, lx * ea, ea.expand_as(lx)], -1)               # (R,N,5)
+
+    def _geo_basis_feats(self, ray_dir3, poses):
+        """The geometry-bias input in the configured basis: (R, N, GEO_FEAT_DIM[geo_basis])."""
+        f = self._geo_feats(ray_dir3, poses)
+        if self.geo_basis == "raw":
+            return f
+        return torch.cat([_sh4_basis(f[..., :3]), f[..., 3:]], -1)                    # (R,N,27)
 
     def _logscale(self, p):
         return p.clamp(-_QK_LOGSCALE_CLIP, _QK_LOGSCALE_CLIP).exp()
+
+    def _register_kv(self, tokens, Q, Qn, B):
+        """Register keys/values and their logits -> (V_reg (B,h,n_reg,dk), logits (B,h,R,n_reg)).
+
+        The registers go through the SAME nk / k / v projections as the acoustic tokens, so they add
+        no parameters beyond the tokens themselves and they live in the same key space the queries
+        already search. Rationale (Darcet et al.): a far ray has nothing worth attending to, the
+        softmax must still sum to one, and it dumps that mass on whatever token is least wrong --
+        which is the artifact. A register is a learnable place to put it.
+        """
+        reg = self.reg
+        if self.scene_registers:
+            # pooled scene code, the global pathway the model otherwise has nowhere. Mean over the
+            # acoustic tokens of the whole observation set, i.e. one code per sample.
+            reg = reg + self.scene_mlp(tokens.mean(1, keepdim=True))       # (B,n_reg,C)
+        rk = self.nk(reg.expand(B, -1, -1) if reg.shape[0] == 1 else reg)
+        Kr = self.k(rk).view(B, -1, self.h, self.dk).transpose(1, 2)
+        Vr = self.v(rk).view(B, -1, self.h, self.dk).transpose(1, 2)
+        if self.qk_norm:
+            creg = (Qn @ _rms_norm_heads(Kr).transpose(-2, -1)) / math.sqrt(self.dk)
+            lreg = (creg * self._logscale(self.logit_scale).view(1, -1, 1, 1)).to(Q.dtype)
+        else:
+            lreg = (Q @ Kr.transpose(-2, -1)) / math.sqrt(self.dk)
+        # no geometry bias on a register: it is attached to no observation and no direction
+        if _MASK_REGISTERS:
+            lreg = torch.full_like(lreg, float("-inf"))
+        return Vr, lreg
 
     def _hier_fuse(self, logits, V, N, M, feats, kv_keep):
         """Exact two-stage decomposition of the single global softmax over the N*M acoustic tokens:
@@ -320,7 +479,7 @@ class RayMicAttn(nn.Module):
         logZ = torch.logsumexp(Lz, dim=-1)                                 # B,h,R,N (-inf if dropped)
         delta = None
         if self.view_fusion == "hier-geo":
-            delta = self.route_mlp(torch.stack(feats, 1))                  # (R,N,h)
+            delta = self.route_mlp(feats)                                  # (R,N,h) from (R,N,gf)
             logZ = logZ + _hiprec(delta.permute(2, 0, 1).unsqueeze(0))      # -inf + finite stays -inf
         alpha = logZ.softmax(-1)                                           # dropped observation -> exactly 0
         out = torch.einsum("bhrn,bhrnd->bhrd", alpha, per_view)
@@ -342,16 +501,25 @@ class RayMicAttn(nn.Module):
         tk = self.nk(tokens)
         K = self.k(tk).view(B, -1, self.h, self.dk).transpose(1, 2)
         V = self.v(tk).view(B, -1, self.h, self.dk).transpose(1, 2)
-        feats = self._geo_feats(ray_dir3, poses) if (self.use_bias or self.view_fusion == "hier-geo") else None
+        feats = self._geo_basis_feats(ray_dir3, poses) if (self.use_bias or self.view_fusion == "hier-geo") else None
+        Qn = _rms_norm_heads(Q) if self.qk_norm else None
         if self.qk_norm:
             # decouple the content logit scale from ||Q||,||K|| so the geometry bias and the content
             # term keep a learnable, head-wise relative size instead of an accidental one
-            content = (_rms_norm_heads(Q) @ _rms_norm_heads(K).transpose(-2, -1)) / math.sqrt(self.dk)
+            content = (Qn @ _rms_norm_heads(K).transpose(-2, -1)) / math.sqrt(self.dk)
             logits = (content * self._logscale(self.logit_scale).view(1, -1, 1, 1)).to(Q.dtype)
         else:
             logits = (Q @ K.transpose(-2, -1)) / math.sqrt(self.dk)
         if self.use_bias:
-            bmic = torch.stack([self.bias_mlp(f) for f in feats], 1)       # (R,N,h)
+            # N calls on the per-observation slices, NOT one call on (R,N,gf). PREREG C1 asked for
+            # the single call ("8 kernel launches per forward"), but it cannot ship: measured on
+            # this node, the one-call form is bit-identical in the FORWARD and its
+            # bias_mlp.2.weight gradient differs by 1.08e-18 relative to the largest gradient in
+            # the configuration -- one wide gemm reduction over R*N rows instead of N accumulated
+            # reductions over R. C1's gate is exact bit-identity, and the gate wins over the
+            # launch count. The host-to-device copies, which were the expensive part, are gone
+            # either way (see _pose_consts).
+            bmic = torch.stack([self.bias_mlp(feats[:, i].contiguous()) for i in range(N)], 1)
             if self.qk_norm:
                 bmic = bmic * self._logscale(self.geo_scale).view(1, 1, -1)
             bfull = bmic.unsqueeze(2).expand(R, N, M, self.h).reshape(R, N * M, self.h)
@@ -359,11 +527,31 @@ class RayMicAttn(nn.Module):
         kv_keep = None
         if _mask_engaged(obs_valid):
             kv_keep = obs_valid[:, :, None].expand(B, N, M).reshape(B, 1, 1, N * M)
+        Vr = lreg = None
+        if self.registers:
+            Vr, lreg = self._register_kv(tokens, Q, Qn, B)
         if self.view_fusion == "global":
-            if kv_keep is None:
+            if kv_keep is None and lreg is None:
                 out_head = logits.softmax(-1) @ V                          # reference path, unchanged
-            else:                                                          # FP32 softmax; dropped keys get weight 0
+            elif lreg is None:                                             # FP32 softmax; dropped keys get weight 0
                 out_head = _hiprec(logits).masked_fill(~kv_keep, float("-inf")).softmax(-1).to(V.dtype) @ V
+            else:
+                # one softmax over [acoustic tokens | registers], then the two value matmuls kept
+                # SEPARATE. That is what makes "registers at -inf" bit-identical to no registers:
+                # the token half is the same contiguous matmul as the reference and the register
+                # half contributes exact zeros, instead of widening one reduction by 4 columns.
+                lt = _hiprec(logits) if kv_keep is None else \
+                    _hiprec(logits).masked_fill(~kv_keep, float("-inf"))
+                p = torch.cat([lt, _hiprec(lreg)], -1).softmax(-1)
+                p_tok = p[..., :N * M].contiguous().to(V.dtype)
+                p_reg = p[..., N * M:].contiguous().to(V.dtype)
+                out_head = p_tok @ V + p_reg @ Vr
+                if self.collect_stats:
+                    with torch.no_grad():
+                        rm = p_reg.detach().float().sum(-1)                 # (B,h,R) mass on registers
+                        self.stats["reg_mass_mean"] = rm.mean().item()
+                        self.stats["reg_mass_max"] = rm.max().item()
+                        self.stats["reg_mass_per_head"] = rm.mean((0, 2)).cpu()
         else:
             out_head = self._hier_fuse(logits, V, N, M, feats, kv_keep)
         if self.ray_gate:
@@ -432,7 +620,8 @@ class OAAv2Depth(nn.Module):
                  no_pose_emb=False, no_ray_emb=False, no_geo_bias=False, no_tf_pe=False, no_cross=False,
                  qk_norm=False, ray_gate=False, view_fusion="global",
                  logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
-                 ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False):
+                 ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
+                 fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw"):
         super().__init__()
         # erp_circular: the decoder convs (ConvTranspose2d, both ResBlk 3x3 convs per stage, head)
         # wrap the azimuth axis instead of zero-padding it. ERP columns 0 and 511 are adjacent
@@ -444,6 +633,9 @@ class OAAv2Depth(nn.Module):
             assert not (qk_norm or ray_gate or view_fusion != "global"), (
                 "--no-cross removes RayMicAttn, so --qk-norm / --ray-gate / --view-fusion have no "
                 "effect; refusing the combination instead of silently ignoring it")
+            assert not (int(registers) or scene_registers or geo_basis != "raw"), (
+                "--no-cross removes RayMicAttn, so --registers / --scene-registers / --geo-basis "
+                "have no effect; refusing the combination instead of silently ignoring it")
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
         # ablations: pathways removed at construction; defaults keep the reference behaviour
         self.no_pose_emb = no_pose_emb    # heading/ear embedding not added to tokens (+AdaLN cond zeroed)
@@ -489,12 +681,30 @@ class OAAv2Depth(nn.Module):
         # way in. Measured after 40 epochs: weight RMS 0.0057 against the decoder's own first conv
         # at 0.0173, i.e. the only high-resolution path stays nearly dead. fine_skip_init > 0 gives
         # it a non-zero start instead; 0.0 reproduces the reference exactly.
+        #
+        # fine_layerscale > 0 is the archfix repair of the same symptom, and it is a different fix:
+        # the zero-init does not merely start small, it makes the gradient reaching `fine_erp`
+        # exactly W^T g = 0, so fine_q / fine_dir_mlp / fine_in / fine_lift get NO gradient at step
+        # 0 and the branch cannot start learning until fine_to_dec drifts off zero on its own.
+        # LayerScale keeps the conv at nn.Conv2d's own init (so the gradient path is alive from step
+        # 0) and scales the branch output by a learnable per-channel gamma instead. fine_skip_init
+        # addressed the magnitude by injecting noise into the decoder and lost (+5.42 %, P_fine02).
+        self.fine_layerscale = float(fine_layerscale)
+        assert self.fine_layerscale >= 0.0, "fine_layerscale must be >= 0"
+        if self.fine_layerscale > 0:
+            assert float(fine_skip_init) == 0.0, (
+                "--fine-layerscale and --fine-skip-init are two different fixes for the same "
+                "symptom and both set the fine-skip conv init; refusing the combination")
         self.fine_to_dec = nn.Conv2d(C, up_ch[0], 1)
         nn.init.zeros_(self.fine_to_dec.bias)
-        if float(fine_skip_init) > 0:
+        if self.fine_layerscale > 0:
+            pass                                       # keep nn.Conv2d's own init; gamma does the scaling
+        elif float(fine_skip_init) > 0:
             nn.init.normal_(self.fine_to_dec.weight, std=float(fine_skip_init))
         else:
             nn.init.zeros_(self.fine_to_dec.weight)
+        if self.fine_layerscale > 0:                   # torch.full draws no RNG: later inits unchanged
+            self.fine_ls = nn.Parameter(torch.full((up_ch[0],), self.fine_layerscale))
         self.register_buffer("fine_dir6_buf", _dir_pe(2 * lh, 2 * lw, torch.device("cpu")), persistent=False)
         self.head = _CircConv2d(up_ch[-1], 1, 3) if erp_circular else nn.Conv2d(up_ch[-1], 1, 3, padding=1)
         # fusion
@@ -503,7 +713,9 @@ class OAAv2Depth(nn.Module):
         self.ray_mic = RayMicAttn(C, use_bias=not no_geo_bias, qk_norm=qk_norm,
                                   ray_gate=ray_gate, view_fusion=view_fusion,
                                   logit_scale_init=logit_scale_init, geo_scale_init=geo_scale_init,
-                                  ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init)
+                                  ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init,
+                                  registers=registers, scene_registers=scene_registers,
+                                  geo_basis=geo_basis)
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):
@@ -556,7 +768,10 @@ class OAAv2Depth(nn.Module):
         B = x_tok.size(0); dev = x_tok.device
         x = x_tok.transpose(1, 2).reshape(B, self.C, self.lh, self.lw)
         fine_erp = self._fine_lift(fine_tok, poses, dev, obs_valid)       # (B,C,2lh,2lw)
-        x = self.up_stages[0](x) + self.fine_to_dec(fine_erp)
+        skip = self.fine_to_dec(fine_erp)
+        if self.fine_layerscale > 0:
+            skip = skip * self.fine_ls.view(1, -1, 1, 1)                  # LayerScale (CaiT)
+        x = self.up_stages[0](x) + skip
         for st in self.up_stages[1:]:
             x = st(x)
         return torch.sigmoid(self.head(x))                                # depth / max_depth in [0,1]

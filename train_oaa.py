@@ -18,7 +18,8 @@ import torch
 
 from core.data import get_data_module
 from core.metrics import cos_lat, depth_loss
-from model.oaa import OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target
+from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES,
+                       IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target)
 
 _DM = get_data_module()          # DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
 loader = _DM.loader
@@ -84,6 +85,11 @@ def main():
     p.add_argument("--ray-gate-mode", default="scalar", choices=list(RAY_GATE_MODES))
     p.add_argument("--ray-gate-init", type=float, default=0.0)   # gate = 2*sigmoid(init); 0 -> 1.0
     p.add_argument("--fine-skip-init", type=float, default=0.0)  # std of the fine-skip conv init
+    # architecture repairs (archfix_, 2026-10-16). All default off => reference recipe, bit for bit.
+    p.add_argument("--fine-layerscale", type=float, default=0.0)   # B1: LayerScale gamma on the fine skip (0 = off)
+    p.add_argument("--registers", type=int, default=0)             # B2: register tokens in the ray cross-attention
+    p.add_argument("--scene-registers", action="store_true")       # B3: registers carry a pooled scene code
+    p.add_argument("--geo-basis", default="raw", choices=list(GEO_BASES))   # B4: raw 5 numbers | degree-4 real SH
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -146,10 +152,18 @@ def main():
                        qk_norm=a.qk_norm, ray_gate=a.ray_gate, view_fusion=a.view_fusion,
                        logit_scale_init=a.logit_scale_init, geo_scale_init=a.geo_scale_init,
                        ray_gate_mode=a.ray_gate_mode, ray_gate_init=a.ray_gate_init,
-                       fine_skip_init=a.fine_skip_init, erp_circular=a.erp_circular).to(device)
+                       fine_skip_init=a.fine_skip_init, erp_circular=a.erp_circular,
+                       fine_layerscale=a.fine_layerscale, registers=a.registers,
+                       scene_registers=a.scene_registers, geo_basis=a.geo_basis).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
-        _sh = lambda c: (__import__("subprocess").run(c, shell=True, capture_output=True, text=True).stdout.strip() or None)
+        # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every
+        # manifest written so far, because a launcher that cd'd anywhere else got "not a repository"
+        # on stderr and an empty stdout, which `or None` then recorded as "clean". git_sha survived
+        # only through the _sha_nogit fallback below, which reads .git/HEAD by path.
+        _REPO = os.path.dirname(os.path.abspath(__file__))
+        _sh = lambda c: (__import__("subprocess").run(c, shell=True, capture_output=True, text=True,
+                                                      cwd=_REPO).stdout.strip() or None)
         # Provenance the run directory could not answer before (2026-10-14). The STFT settings are
         # module-level env reads in the data module (STFT_NFFT / STFT_WIN / STFT_HOP, plus MP3D's
         # STFT_WINDOW crop), so a manifest without them cannot tell "ran at the released hop 160"

@@ -676,8 +676,10 @@ def test_yaw_roll_target_matches_the_model_convention():
     E, A = torch.meshgrid(el, az, indexing="ij")
     dir3 = torch.stack([torch.cos(E) * torch.sin(A), torch.sin(E), torch.cos(E) * torch.cos(A)], -1).reshape(-1, 3)
     assert _maxdiff(dir3.float(), m.dir6_buf[:, :3]) < 1e-6, "test grid must be the model's grid"
-    f0 = torch.stack(m.ray_mic._geo_feats(dir3, m.view_pose), 0).view(nv, lh, lw, 5)
-    f1 = torch.stack(m.ray_mic._geo_feats(dir3, p1), 0).view(nv, lh, lw, 5)
+    # _geo_feats returns (R, N, 5) since the archfix C1 batching (it used to return a per-observation
+    # list); move the observation axis to the front to get the (N, lh, lw, 5) view this test wants.
+    f0 = m.ray_mic._geo_feats(dir3, m.view_pose).permute(1, 0, 2).reshape(nv, lh, lw, 5)
+    f1 = m.ray_mic._geo_feats(dir3, p1).permute(1, 0, 2).reshape(nv, lh, lw, 5)
     d = _maxdiff(f1, torch.roll(f0, 1, dims=2))
     note("yaw_roll_geo_feats_consistency_maxdiff", f"{d:.3e} (feats(yaw+one column) == roll(feats, +1 col))")
     assert d < 1e-12, d

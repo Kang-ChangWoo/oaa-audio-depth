@@ -6,6 +6,7 @@ build(args, DM) -> (model, dmode, nch, kind, poses)
     poses OAA view poses [(yaw, ear)] for that mode (None for other models)
 EchoDiffusion checkpoints are not handled here (isolated env; see eval_echodiffusion.py).
 """
+import json
 import os
 import torch
 
@@ -83,7 +84,13 @@ def build(args, DM):
                    ray_gate_init=args.get("ray_gate_init", 0.0) or 0.0,
                    fine_skip_init=args.get("fine_skip_init", 0.0) or 0.0,
                    # decoder seam handling; absent in every earlier checkpoint -> reference zero padding
-                   erp_circular=args.get("erp_circular", False) or False)
+                   erp_circular=args.get("erp_circular", False) or False,
+                   # architecture repairs (archfix_, 2026-10-16); absent in every earlier
+                   # checkpoint, and these defaults are exactly the reference model
+                   fine_layerscale=args.get("fine_layerscale", 0.0) or 0.0,
+                   registers=args.get("registers", 0) or 0,
+                   scene_registers=args.get("scene_registers", False) or False,
+                   geo_basis=args.get("geo_basis") or "raw")
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]
@@ -102,9 +109,36 @@ def resolve_run(run, search_dirs):
     raise FileNotFoundError(f"run '{run}' not found under {search_dirs}")
 
 
+_MANIFEST_STFT = {"STFT_HOP": "stft_hop", "STFT_WIN": "stft_win",
+                  "STFT_NFFT": "stft_nfft", "STFT_WINDOW": "stft_window"}
+
+
+def _stft_from_manifest(run_dir, args):
+    """train_oaa.py stamps the STFT it trained with into the run's manifest.json, NOT into the
+    checkpoint args. Without this, build()'s guard reads its own default 160 for a hop-16 run
+    and refuses it -- and eval.py catches that per run and only prints `[skip <run>]`, so a
+    hop-16 scoring pass silently drops every OAA row while keeping the baselines. Filling the
+    args from the manifest makes the guard compare real values with real values.
+
+    This does NOT loosen the guard: a run whose manifest really records hop 160 still raises
+    under a hop-16 data module, and a run with no manifest keeps the old default behaviour.
+    """
+    p = os.path.join(run_dir, "manifest.json")
+    if not os.path.exists(p):
+        return args
+    try:
+        st = (json.load(open(p)) or {}).get("stft") or {}
+    except Exception:
+        return args
+    for env, key in _MANIFEST_STFT.items():
+        if key not in args and env in st:
+            args = dict(args, **{key: int(st[env])})
+    return args
+
+
 def load_run(run_dir, DM, ckpt="best", device="cpu"):
     """Load <run_dir>/<ckpt>.pth -> (model (eval mode, on device), dmode, nch, kind, poses, ck_dict)."""
     ck = torch.load(os.path.join(run_dir, f"{ckpt}.pth"), map_location="cpu", weights_only=False)
-    model, dmode, nch, kind, poses = build(ck["args"], DM)
+    model, dmode, nch, kind, poses = build(_stft_from_manifest(run_dir, ck["args"]), DM)
     model.load_state_dict(ck["state_dict"]); model.to(device).eval()
     return model, dmode, nch, kind, poses, ck
