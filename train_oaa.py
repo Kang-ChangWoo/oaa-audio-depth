@@ -260,7 +260,7 @@ def main():
     for ep in range(start_ep, a.epochs):
         if ddp:
             tr_sampler.set_epoch(ep)
-        model.train(); t0 = time.time(); run = 0.0; nb = 0
+        model.train(); t0 = time.time(); run = 0.0; nb = 0; nskip = 0
         opt.zero_grad()
         for i, b in enumerate(tr):
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
@@ -300,7 +300,21 @@ def main():
                 (loss / accum).backward()                              # accumulate grads over `accum` micro-batches
                 run += float(loss.detach()); nb += 1
             if (i + 1) % accum == 0 or (i + 1) == nbatch:              # optimizer step per effective batch
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                # NaN guard (2026-10-17). clip_grad_norm_ scales EVERY gradient by
+                # max_norm/(total_norm+1e-6); when total_norm is nan that factor is nan, so a
+                # single bad micro-batch turns the weights AND AdamW's exp_avg into nan and the
+                # run can never recover -- relevel_h16_ours_r8_mp3d_s0 burned ep13-17 that way
+                # (loss=nan val_MAE=nan for five straight epochs, 4 GPU-hours).
+                # Drop the step, keep the cadence: sched.step() still fires, so the LR horizon
+                # stays exactly where it was pre-registered. This branch is unreachable while the
+                # gradients are finite, so a healthy run is bit-for-bit the reference recipe.
+                if not bool(torch.isfinite(gnorm)):
+                    nskip += 1
+                    print(f"[nanskip] ep{ep} batch{i}: grad norm {float(gnorm)}, step dropped",
+                          flush=True)
+                    opt.zero_grad(); sched.step()
+                    continue
                 opt.step(); sched.step(); opt.zero_grad()
                 with torch.no_grad():
                     for q, w in zip(ema.parameters(), raw_model.parameters()):
@@ -312,8 +326,9 @@ def main():
             if a.dump_attn_stats and not a.no_cross:
                 ema.ray_mic.collect_stats = True        # sampled during val only; cannot touch training
             vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
-            hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae})
-            print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m", flush=True)
+            hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae, "nan_steps_skipped": nskip})
+            print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m"
+                  + (f" nanskip={nskip}" if nskip else ""), flush=True)
             if a.dump_attn_stats and not a.no_cross:
                 ema.ray_mic.collect_stats = False
                 _st = {k: (v.tolist() if torch.is_tensor(v) else v) for k, v in ema.ray_mic.stats.items()}
@@ -322,6 +337,15 @@ def main():
             if vmae < best:
                 best = vmae
                 torch.save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, "best.pth"))
+            # Resumable bundle every epoch (2026-10-17), atomically. The old code wrote last.pth
+            # ONCE, after the final epoch, so a run that died mid-training left only best.pth --
+            # EMA weights with no raw_state and no optimizer state, which --resume cannot load.
+            # Selection is untouched: best.pth is still the val-MAE minimum and is what eval reads.
+            _tmp = os.path.join(rd, "last.pth.tmp")
+            torch.save({"state_dict": ema.state_dict(), "raw_state": raw_model.state_dict(),
+                        "opt": opt.state_dict(), "sched_last_epoch": sched.last_epoch,
+                        "next_epoch": ep + 1, "args": vars(a)}, _tmp)
+            os.replace(_tmp, os.path.join(rd, "last.pth"))
         if ddp:
             dist.barrier()
     if is_main:
