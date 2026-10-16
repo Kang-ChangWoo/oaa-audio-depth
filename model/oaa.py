@@ -61,6 +61,9 @@ GEO_BASES = ("raw", "sh4")
 # geometry-bias input width per basis: raw = [R(-yaw)r (3), r.ear_axis*ear (1), ear (1)];
 # sh4 = the same with the 3 direction components replaced by 25 real SH coefficients.
 GEO_FEAT_DIM = {"raw": 5, "sh4": 27}
+# feed-forward nonlinearity in the 4 `erp` query-refinement blocks. "off" is the reference
+# LayerNorm -> Linear(C,2C) -> GELU -> Linear(2C,C).
+SWIGLU_MODES = ("off", "wide", "matched")
 # parameters that are deliberately initialised at zero/identity. They all share one measured
 # symptom: after 40 epochs they have barely left their initial value (logit_scale 3-11 %,
 # fine_to_dec RMS 0.0057 against the decoder's own 0.0173). `--param-lr-mult` gives exactly this
@@ -259,12 +262,58 @@ class ViewEncoder(nn.Module):
         return tok, ft
 
 
+def _swiglu_hidden(C, mode):
+    """Hidden width of the SwiGLU feed-forward, per mode.
+
+    The reference block is LN(C) + Linear(C,2C) + Linear(2C,C) = 4C^2 + 5C parameters.
+    A SwiGLU block is LN(C) + 2 x Linear(C,h) + Linear(h,C) = 3Ch + 2h + 3C.
+
+    "wide"     h = 2C. The hidden width is untouched and the gating projection is simply added, so
+               the block gains 2C^2 + 2C (131,584 at C=256; x4 blocks = +0.526 M). This BREAKS the
+               15.45 M ceiling, which Changwoo approved explicitly on 2026-10-16.
+    "matched"  the largest h whose SwiGLU parameter count does not EXCEED the reference block's:
+               3Ch + 2h + 3C <= 4C^2 + 5C  =>  h <= (4C^2 + 2C)/(3C + 2). At C=256 that is 341.1,
+               so h = 341 and the block lands 86 parameters UNDER the reference. The point of this
+               version is "same parameter count, different nonlinearity", not more capacity.
+    """
+    assert mode in SWIGLU_MODES, f"swiglu mode {mode} not in {SWIGLU_MODES}"
+    if mode == "wide":
+        return 2 * C
+    return (4 * C * C + 2 * C) // (3 * C + 2)
+
+
+class _SwiGLUFFN(nn.Module):
+    """SwiGLU feed-forward, drop-in for the pre-LN `LayerNorm -> Linear -> GELU -> Linear` block:
+    down(silu(gate(h)) * up(h)) instead of W2 GELU(W1 h).
+
+    Unlike every archfix switch this CANNOT be bit-identical to the reference at any
+    initialisation -- the nonlinearity itself is multiplicative and no zero/identity setting
+    recovers GELU. So the gate is the two-part form B1 used: the flag OFF is bit-identical and
+    strict-loads old checkpoints, and the flag ON is checked for a sane forward plus a live
+    gradient on every tensor (tests/test_oaa_ffn_swiglu.py).
+    """
+    def __init__(self, C, hidden):
+        super().__init__()
+        self.hidden = int(hidden)
+        self.n = nn.LayerNorm(C)
+        self.gate = nn.Linear(C, self.hidden)
+        self.up = nn.Linear(C, self.hidden)
+        self.down = nn.Linear(self.hidden, C)
+
+    def forward(self, x):
+        h = self.n(x)
+        return self.down(F.silu(self.gate(h)) * self.up(h))
+
+
 class SelfAttn(nn.Module):
     """Pre-LN self-attention block (query refinement)."""
-    def __init__(self, C, heads=8):
+    def __init__(self, C, heads=8, swiglu="off"):
         super().__init__()
         self.n = nn.LayerNorm(C); self.a = nn.MultiheadAttention(C, heads, batch_first=True)
-        self.m = nn.Sequential(nn.LayerNorm(C), nn.Linear(C, 2 * C), nn.GELU(), nn.Linear(2 * C, C))
+        # "off" keeps the exact reference Sequential, so its state_dict keys (m.0 / m.1 / m.3) and
+        # every value are untouched and old checkpoints load with strict=True.
+        self.m = (_SwiGLUFFN(C, _swiglu_hidden(C, swiglu)) if swiglu != "off" else
+                  nn.Sequential(nn.LayerNorm(C), nn.Linear(C, 2 * C), nn.GELU(), nn.Linear(2 * C, C)))
 
     def forward(self, x):
         h = self.n(x)
@@ -669,8 +718,10 @@ class OAAv2Depth(nn.Module):
                  logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
                  fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False):
+                 geo_value_film=False, ffn_swiglu="off"):
         super().__init__()
+        assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
+        self.ffn_swiglu = ffn_swiglu
         # erp_circular: the decoder convs (ConvTranspose2d, both ResBlk 3x3 convs per stage, head)
         # wrap the azimuth axis instead of zero-padding it. ERP columns 0 and 511 are adjacent
         # directions (behind the listener); zero padding tells the decoder they are image borders.
@@ -704,7 +755,7 @@ class OAAv2Depth(nn.Module):
         self.q = nn.Parameter(torch.randn(1, self.M, C) * 0.02)                           # learnable panoramic queries
         self.dir_mlp = nn.Sequential(nn.Linear(6, C), nn.GELU(), nn.Linear(C, C))        # MLP_ray (query side)
         self.glob_dir = nn.Sequential(nn.Linear(6, C), nn.GELU(), nn.Linear(C, C))       # ray emb added after fusion
-        self.erp = nn.ModuleList([SelfAttn(C) for _ in range(4)])                         # 4 refinement blocks
+        self.erp = nn.ModuleList([SelfAttn(C, swiglu=ffn_swiglu) for _ in range(4)])      # 4 refinement blocks
         self.aux_head = nn.Linear(C, 1)   # coarse-depth head; kept for checkpoint compatibility (not used by the loss)
         if nviews == 8:                                                  # loader mode 'r8' channel order
             self.view_pose = list(_POOL8)

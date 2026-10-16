@@ -94,7 +94,9 @@ def build(args, DM):
                    # GeoFiLM; absent in every earlier checkpoint -> reference (no film). Without
                    # this line a trained --geo-value-film run fails strict load and eval.py drops
                    # the row with a bare [skip <run>], leaving the baselines standing alone.
-                   geo_value_film=args.get("geo_value_film", False) or False)
+                   geo_value_film=args.get("geo_value_film", False) or False,
+                   # SwiGLU in the erp blocks; absent in every earlier checkpoint -> reference GELU
+                   ffn_swiglu=args.get("ffn_swiglu") or "off")
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

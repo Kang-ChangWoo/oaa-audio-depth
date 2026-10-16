@@ -18,7 +18,7 @@ import torch
 
 from core.data import get_data_module
 from core.metrics import cos_lat, depth_loss
-from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES,
+from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES, SWIGLU_MODES,
                        IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target)
 
 _DM = get_data_module()          # DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
@@ -91,6 +91,9 @@ def main():
     p.add_argument("--scene-registers", action="store_true")       # B3: registers carry a pooled scene code
     p.add_argument("--geo-basis", default="raw", choices=list(GEO_BASES))   # B4: raw 5 numbers | degree-4 real SH
     p.add_argument("--geo-value-film", action="store_true")         # GeoFiLM: geometry-conditioned value readout
+    # D1/D2 (2026-10-16): SwiGLU in the 4 erp refinement blocks. "wide" keeps hidden 2C and breaks
+    # the 15.45 M ceiling (approved); "matched" shrinks hidden so the parameter count is neutral.
+    p.add_argument("--ffn-swiglu", default="off", choices=list(SWIGLU_MODES))
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -156,7 +159,8 @@ def main():
                        fine_skip_init=a.fine_skip_init, erp_circular=a.erp_circular,
                        fine_layerscale=a.fine_layerscale, registers=a.registers,
                        scene_registers=a.scene_registers, geo_basis=a.geo_basis,
-                       geo_value_film=a.geo_value_film).to(device)
+                       geo_value_film=a.geo_value_film,
+                       ffn_swiglu=a.ffn_swiglu).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every
