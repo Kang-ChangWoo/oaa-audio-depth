@@ -90,6 +90,7 @@ def main():
     p.add_argument("--registers", type=int, default=0)             # B2: register tokens in the ray cross-attention
     p.add_argument("--scene-registers", action="store_true")       # B3: registers carry a pooled scene code
     p.add_argument("--geo-basis", default="raw", choices=list(GEO_BASES))   # B4: raw 5 numbers | degree-4 real SH
+    p.add_argument("--geo-value-film", action="store_true")         # GeoFiLM: geometry-conditioned value readout
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -154,7 +155,8 @@ def main():
                        ray_gate_mode=a.ray_gate_mode, ray_gate_init=a.ray_gate_init,
                        fine_skip_init=a.fine_skip_init, erp_circular=a.erp_circular,
                        fine_layerscale=a.fine_layerscale, registers=a.registers,
-                       scene_registers=a.scene_registers, geo_basis=a.geo_basis).to(device)
+                       scene_registers=a.scene_registers, geo_basis=a.geo_basis,
+                       geo_value_film=a.geo_value_film).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every

@@ -318,7 +318,8 @@ class RayMicAttn(nn.Module):
     def __init__(self, C, heads=8, use_bias=True, qk_norm=False, ray_gate=False,
                  view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
                  ray_gate_mode="scalar", ray_gate_init=0.0,
-                 registers=0, scene_registers=False, geo_basis="raw"):
+                 registers=0, scene_registers=False, geo_basis="raw",
+                 geo_value_film=False):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
@@ -372,6 +373,31 @@ class RayMicAttn(nn.Module):
             self.gate_proj = nn.Linear(C, n_out)
             nn.init.zeros_(self.gate_proj.weight)
             nn.init.constant_(self.gate_proj.bias, float(ray_gate_init))
+        # ---- GeoFiLM (--geo-value-film). A per-(ray, observation, head) MULTIPLICATIVE
+        # reweighting of the POST-softmax attention probabilities, driven by the same geometry
+        # features the pre-softmax bias already uses. Distinct from all three existing relatives:
+        #   * the geometry bias is pre-softmax, so it can only REDISTRIBUTE mass between tokens;
+        #     the total attention mass is pinned to 1 and the output magnitude is not addressable.
+        #   * ray_gate is per-(ray, head), content-driven and geometry-blind, and is applied AFTER
+        #     the sum over observations, so it cannot down-weight one observation against another.
+        #   * registers are geometry-blind and spend their mass on a learned token.
+        # Folding the scale into the PROBABILITIES (p' = p * film, then one p' @ V matmul) keeps the
+        # reference reduction order, so film == 1.0 exactly at init is bit-identical, not merely
+        # close. Scaling V per observation instead would split the value matmul and re-associate
+        # the reduction -- the same thing that cost archfix C1 its bit-identity. Zero-init weight
+        # AND bias => film = 1 + 0 = 1.0 exactly.
+        self.geo_value_film = bool(geo_value_film)
+        if self.geo_value_film:
+            assert view_fusion == "global", (
+                f"--geo-value-film reweights the single global softmax per observation; "
+                f"view_fusion={view_fusion} already decomposes it per observation and the two "
+                f"mechanisms would be fighting over the same quantity. Refusing the combination")
+            assert use_bias, (
+                "--geo-value-film reads the SAME geometry features as the pre-softmax bias; with "
+                "--no-geo-bias those features are never computed. Refusing the combination")
+            self.value_film = nn.Linear(gf, heads)
+            nn.init.zeros_(self.value_film.weight)
+            nn.init.zeros_(self.value_film.bias)
         if view_fusion == "hier-geo":
             self.route_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
@@ -530,11 +556,30 @@ class RayMicAttn(nn.Module):
         Vr = lreg = None
         if self.registers:
             Vr, lreg = self._register_kv(tokens, Q, Qn, B)
+        film = None
+        if self.geo_value_film:
+            # feats (R,N,gf) -> (R,N,h) -> (1,h,R,N), then kept as (1,h,R,N,1) and BROADCAST
+            # against a free reshape of the probabilities. Materialising it at (1,h,R,N*M) would
+            # allocate a second tensor the size of the logits for no benefit.
+            fv = (1.0 + self.value_film(feats)).permute(2, 0, 1).unsqueeze(0)   # (1,h,R,N)
+            film = fv.unsqueeze(-1).to(logits.dtype)                            # (1,h,R,N,1)
+            if self.collect_stats:
+                with torch.no_grad():
+                    f32 = fv.detach().float()
+                    self.stats.update(film_mean=f32.mean().item(), film_std=f32.std().item(),
+                                      film_min=f32.min().item(), film_max=f32.max().item())
+                    self.stats["film_mean_per_view"] = f32.mean((0, 1, 2)).cpu()
         if self.view_fusion == "global":
             if kv_keep is None and lreg is None:
-                out_head = logits.softmax(-1) @ V                          # reference path, unchanged
+                p_tok = logits.softmax(-1)
+                if film is not None:            # film == 1.0 exactly at init -> bitwise no-op
+                    p_tok = (p_tok.reshape(B, self.h, R, N, M) * film).reshape(B, self.h, R, N * M)
+                out_head = p_tok @ V                                       # reference path, unchanged
             elif lreg is None:                                             # FP32 softmax; dropped keys get weight 0
-                out_head = _hiprec(logits).masked_fill(~kv_keep, float("-inf")).softmax(-1).to(V.dtype) @ V
+                p_tok = _hiprec(logits).masked_fill(~kv_keep, float("-inf")).softmax(-1).to(V.dtype)
+                if film is not None:
+                    p_tok = (p_tok.reshape(B, self.h, R, N, M) * film).reshape(B, self.h, R, N * M)
+                out_head = p_tok @ V
             else:
                 # one softmax over [acoustic tokens | registers], then the two value matmuls kept
                 # SEPARATE. That is what makes "registers at -inf" bit-identical to no registers:
@@ -545,6 +590,8 @@ class RayMicAttn(nn.Module):
                 p = torch.cat([lt, _hiprec(lreg)], -1).softmax(-1)
                 p_tok = p[..., :N * M].contiguous().to(V.dtype)
                 p_reg = p[..., N * M:].contiguous().to(V.dtype)
+                if film is not None:            # registers are attached to no observation
+                    p_tok = (p_tok.reshape(B, self.h, R, N, M) * film).reshape(B, self.h, R, N * M)
                 out_head = p_tok @ V + p_reg @ Vr
                 if self.collect_stats:
                     with torch.no_grad():
@@ -621,7 +668,8 @@ class OAAv2Depth(nn.Module):
                  qk_norm=False, ray_gate=False, view_fusion="global",
                  logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
-                 fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw"):
+                 fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
+                 geo_value_film=False):
         super().__init__()
         # erp_circular: the decoder convs (ConvTranspose2d, both ResBlk 3x3 convs per stage, head)
         # wrap the azimuth axis instead of zero-padding it. ERP columns 0 and 511 are adjacent
@@ -636,6 +684,9 @@ class OAAv2Depth(nn.Module):
             assert not (int(registers) or scene_registers or geo_basis != "raw"), (
                 "--no-cross removes RayMicAttn, so --registers / --scene-registers / --geo-basis "
                 "have no effect; refusing the combination instead of silently ignoring it")
+            assert not geo_value_film, (
+                "--no-cross removes RayMicAttn, so --geo-value-film has no effect; refusing the "
+                "combination instead of silently ignoring it")
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
         # ablations: pathways removed at construction; defaults keep the reference behaviour
         self.no_pose_emb = no_pose_emb    # heading/ear embedding not added to tokens (+AdaLN cond zeroed)
@@ -715,7 +766,7 @@ class OAAv2Depth(nn.Module):
                                   logit_scale_init=logit_scale_init, geo_scale_init=geo_scale_init,
                                   ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init,
                                   registers=registers, scene_registers=scene_registers,
-                                  geo_basis=geo_basis)
+                                  geo_basis=geo_basis, geo_value_film=geo_value_film)
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):
