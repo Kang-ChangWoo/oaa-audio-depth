@@ -28,6 +28,7 @@ import importlib.util
 import math
 import os
 import sys
+import types
 
 import torch
 
@@ -468,6 +469,44 @@ def test_existing_hop16_checkpoint_strict_loads_into_default_off_model():
     assert sorted(out.missing_keys) == FILM_KEYS, out.missing_keys
     assert list(out.unexpected_keys) == [], out.unexpected_keys
     note("hop16_ckpt_warm_start_into_film", "missing = the two film tensors, unexpected = []")
+
+
+def test_film_config_round_trips_through_core_ckpt():
+    """Save {state_dict, args} -> core.ckpt.build(args, DM) -> strict load -> identical prediction.
+    Without this the cell trains fine and is then UNSCOREABLE: eval.py catches the strict-load
+    failure per run and prints only `[skip <run>]`, so the OAA row vanishes and the baselines look
+    like the whole table."""
+    from core.ckpt import build
+    DM = types.SimpleNamespace(IN_CH={"r2": 2, "cB": 4, "fb": 4, "r6": 6, "r8": 8}, POSES={},
+                               WINDOW=0, HOP=160, WIN=400, N_FFT=512)
+    DM.__name__ = "data_0422"
+    cfgs = [{}, {"geo_value_film": True}, {"geo_value_film": True, "geo_basis": "sh4"},
+            {"geo_value_film": True, "qk_norm": True},
+            {"geo_value_film": True, "registers": 4, "scene_registers": True,
+             "fine_layerscale": 1e-4, "geo_basis": "sh4"}]
+    for extra in cfgs:
+        args = dict(nviews=2, data_mode="r2", dim=64, rounds=2, lift_h=4, lift_w=8,
+                    stem_stride1=True, max_depth=10.0, dec_deep=True, rounds_wired=True,
+                    cond_mode="adaln", full_res_enc=True, multi_scale_lift=True,
+                    data_module="data_0422", **extra)
+        torch.manual_seed(0)
+        src = OAAv2Depth(C=64, nviews=2, lh=4, lw=8, stem_stride1=True,
+                         qk_norm=extra.get("qk_norm", False),
+                         fine_layerscale=extra.get("fine_layerscale", 0.0),
+                         registers=extra.get("registers", 0),
+                         scene_registers=extra.get("scene_registers", False),
+                         geo_basis=extra.get("geo_basis", "raw"),
+                         geo_value_film=extra.get("geo_value_film", False)).eval()
+        rebuilt, dmode, nch, kind, poses = build(args, DM)
+        assert set(rebuilt.state_dict()) == set(src.state_dict()), extra
+        rebuilt.load_state_dict(src.state_dict(), strict=True)
+        rebuilt.eval()
+        x = torch.rand(1, 2, 24, 40)
+        with torch.no_grad():
+            d = _maxdiff(src(x), rebuilt(x))
+        assert d == 0.0, (extra, d)
+    note("film_ckpt_round_trip", f"{len(cfgs)} configs strict-loaded and prediction-compared: "
+                                 f"max|diff| = 0.0")
 
 
 # ======================================================================= runner

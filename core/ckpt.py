@@ -90,7 +90,11 @@ def build(args, DM):
                    fine_layerscale=args.get("fine_layerscale", 0.0) or 0.0,
                    registers=args.get("registers", 0) or 0,
                    scene_registers=args.get("scene_registers", False) or False,
-                   geo_basis=args.get("geo_basis") or "raw")
+                   geo_basis=args.get("geo_basis") or "raw",
+                   # GeoFiLM; absent in every earlier checkpoint -> reference (no film). Without
+                   # this line a trained --geo-value-film run fails strict load and eval.py drops
+                   # the row with a bare [skip <run>], leaving the baselines standing alone.
+                   geo_value_film=args.get("geo_value_film", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]
