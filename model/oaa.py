@@ -368,7 +368,7 @@ class RayMicAttn(nn.Module):
                  view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
                  ray_gate_mode="scalar", ray_gate_init=0.0,
                  registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False):
+                 geo_value_film=False, film_lse=False):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
@@ -447,6 +447,32 @@ class RayMicAttn(nn.Module):
             self.value_film = nn.Linear(gf, heads)
             nn.init.zeros_(self.value_film.weight)
             nn.init.zeros_(self.value_film.bias)
+        # ---- C1 content abstention gate (--film-lse). ONE extra column on the film's input: the
+        # per-(ray, observation, head) logsumexp of the pre-softmax logits over that observation's
+        # M tokens, i.e. the total query-key match mass that the softmax is about to normalise
+        # away. Softmax is scale-invariant in its input, so "how much is there to hear" is exactly
+        # the quantity the reference model throws out; GeoFiLM restores the geometry half of it and
+        # this restores the content half.
+        #
+        # Why this is NOT a retry of --ray-gate, which sat flat at 1.0 in 13 of 14 runs: ray_gate
+        # is driven by q_ln, which is built from self.q and dir_mlp(dir6) only -- a per-ray prior
+        # that never sees a key, so it had no input with which to detect "there is nothing here".
+        # logsumexp(logits) is by construction a function of the key content. Same position in the
+        # network, opposite driving signal. If this one also dies flat, that is the negative result
+        # that closes the output-magnitude axis.
+        #
+        # Shape (heads,), deliberately NOT nn.Linear(1, heads): a bias column would duplicate
+        # value_film.bias, which already carries the per-head constant. +8 parameters, not +16.
+        # Zero-init => film_lse_w * lse is exactly 0.0, and film + 0.0 == film bit for bit, while
+        # dfilm/dw = lse != 0 so the gradient is alive at step 0. The exponential null-token form
+        # (softmax_1 / zero-value key), which is the literature's canonical abstention, cannot have
+        # both: at the bias where keep == 1.0 exactly, dkeep/db is exactly -0.0 (measured).
+        self.film_lse = bool(film_lse)
+        if self.film_lse:
+            assert self.geo_value_film, (
+                "--film-lse adds a column to the GeoFiLM film input, so it requires "
+                "--geo-value-film; refusing to build a gate with nothing to gate")
+            self.film_lse_w = nn.Parameter(torch.zeros(heads))
         if view_fusion == "hier-geo":
             self.route_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
@@ -612,9 +638,27 @@ class RayMicAttn(nn.Module):
             # allocate a second tensor the size of the logits for no benefit.
             fv = (1.0 + self.value_film(feats)).permute(2, 0, 1).unsqueeze(0)   # (1,h,R,N)
             film = fv.unsqueeze(-1).to(logits.dtype)                            # (1,h,R,N,1)
+            if self.film_lse:
+                # (B,h,R,N) off the very logits this branch is about to normalise. Reduce on a
+                # RESHAPED VIEW, never on a materialised copy: logsumexp's output is (B,h,R,N),
+                # which is M times smaller than the logits, so the only large allocation is the
+                # masked_fill below and that happens only when an observation is actually dropped.
+                # A fully dropped observation is all -inf -> logsumexp = -inf -> 0.0 * -inf = nan.
+                # Its probabilities are exactly 0 either way, so non-finite rows are replaced by 0
+                # instead of being allowed to poison the product.
+                lg = logits.reshape(B, self.h, R, N, M)
+                if kv_keep is not None:
+                    lg = lg.masked_fill(~kv_keep.reshape(B, 1, 1, N, M), float("-inf"))
+                lse = lg.logsumexp(-1)
+                lse = torch.where(torch.isfinite(lse), lse, torch.zeros_like(lse))
+                film = film + (self.film_lse_w.view(1, -1, 1, 1, 1)
+                               * lse.unsqueeze(-1)).to(film.dtype)
             if self.collect_stats:
                 with torch.no_grad():
-                    f32 = fv.detach().float()
+                    # report the multiplier that is actually applied, not the geometry half of it,
+                    # so M1/M3 read the same tensor the forward used. With --film-lse off this is
+                    # fv to the bit, so the GeoFiLM gates are unaffected.
+                    f32 = film.detach().squeeze(-1).float()
                     self.stats.update(film_mean=f32.mean().item(), film_std=f32.std().item(),
                                       film_min=f32.min().item(), film_max=f32.max().item())
                     self.stats["film_mean_per_view"] = f32.mean((0, 1, 2)).cpu()
@@ -718,7 +762,7 @@ class OAAv2Depth(nn.Module):
                  logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
                  fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False, ffn_swiglu="off"):
+                 geo_value_film=False, film_lse=False, ffn_swiglu="off"):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
         self.ffn_swiglu = ffn_swiglu
@@ -735,9 +779,9 @@ class OAAv2Depth(nn.Module):
             assert not (int(registers) or scene_registers or geo_basis != "raw"), (
                 "--no-cross removes RayMicAttn, so --registers / --scene-registers / --geo-basis "
                 "have no effect; refusing the combination instead of silently ignoring it")
-            assert not geo_value_film, (
-                "--no-cross removes RayMicAttn, so --geo-value-film has no effect; refusing the "
-                "combination instead of silently ignoring it")
+            assert not (geo_value_film or film_lse), (
+                "--no-cross removes RayMicAttn, so --geo-value-film / --film-lse have no effect; "
+                "refusing the combination instead of silently ignoring it")
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
         # ablations: pathways removed at construction; defaults keep the reference behaviour
         self.no_pose_emb = no_pose_emb    # heading/ear embedding not added to tokens (+AdaLN cond zeroed)
@@ -817,7 +861,8 @@ class OAAv2Depth(nn.Module):
                                   logit_scale_init=logit_scale_init, geo_scale_init=geo_scale_init,
                                   ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init,
                                   registers=registers, scene_registers=scene_registers,
-                                  geo_basis=geo_basis, geo_value_film=geo_value_film)
+                                  geo_basis=geo_basis, geo_value_film=geo_value_film,
+                                  film_lse=film_lse)
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):

@@ -95,6 +95,10 @@ def build(args, DM):
                    # this line a trained --geo-value-film run fails strict load and eval.py drops
                    # the row with a bare [skip <run>], leaving the baselines standing alone.
                    geo_value_film=args.get("geo_value_film", False) or False,
+                   # C1 content abstention gate; absent in every earlier checkpoint ->
+                   # reference. Same reason as the line above: without it a trained
+                   # --film-lse run fails strict load and eval.py drops the row silently.
+                   film_lse=args.get("film_lse", False) or False,
                    # SwiGLU in the erp blocks; absent in every earlier checkpoint -> reference GELU
                    ffn_swiglu=args.get("ffn_swiglu") or "off")
     poses = poses_for(dmode)

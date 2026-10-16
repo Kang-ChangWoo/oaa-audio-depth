@@ -91,6 +91,9 @@ def main():
     p.add_argument("--scene-registers", action="store_true")       # B3: registers carry a pooled scene code
     p.add_argument("--geo-basis", default="raw", choices=list(GEO_BASES))   # B4: raw 5 numbers | degree-4 real SH
     p.add_argument("--geo-value-film", action="store_true")         # GeoFiLM: geometry-conditioned value readout
+    # C1 (2026-10-16): one logsumexp column on the GeoFiLM film input, +8 parameters.
+    # Requires --geo-value-film; the content half of "how hard to read this observation".
+    p.add_argument("--film-lse", action="store_true")
     # D1/D2 (2026-10-16): SwiGLU in the 4 erp refinement blocks. "wide" keeps hidden 2C and breaks
     # the 15.45 M ceiling (approved); "matched" shrinks hidden so the parameter count is neutral.
     p.add_argument("--ffn-swiglu", default="off", choices=list(SWIGLU_MODES))
@@ -159,7 +162,7 @@ def main():
                        fine_skip_init=a.fine_skip_init, erp_circular=a.erp_circular,
                        fine_layerscale=a.fine_layerscale, registers=a.registers,
                        scene_registers=a.scene_registers, geo_basis=a.geo_basis,
-                       geo_value_film=a.geo_value_film,
+                       geo_value_film=a.geo_value_film, film_lse=a.film_lse,
                        ffn_swiglu=a.ffn_swiglu).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
