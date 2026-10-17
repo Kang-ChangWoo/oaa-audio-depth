@@ -71,8 +71,15 @@ class OutConv(nn.Sequential):
 
 
 class ASPP(nn.Module):
-    def __init__(self, in_channel=512, depth=256):
+    # DIAGNOSTIC SWITCH (2026-10-16, band_attrib follow-up): global_pool=False makes the fifth
+    # branch LOCAL instead of global -- self.conv is applied straight to x (1x1, receptive field
+    # one pixel) rather than to the 1x1 global average. Nothing is deleted: the module list, the
+    # state_dict keys, the parameter count and the 5-way concat are all unchanged, and every
+    # parameter still receives gradient (so DDP needs no find_unused_parameters). The ONLY thing
+    # removed is the global receptive field. Default True = the released behaviour, bit-identical.
+    def __init__(self, in_channel=512, depth=256, global_pool=True):
         super(ASPP, self).__init__()
+        self.global_pool = global_pool
         # global average pooling : init nn.AdaptiveAvgPool2d ;also forward torch.mean(,,keep_dim=True)
         self.mean = nn.AdaptiveAvgPool2d((1, 1))
         self.conv = nn.Conv2d(in_channel, depth, 1, 1)
@@ -91,9 +98,13 @@ class ASPP(nn.Module):
     def forward(self, x):
         size = x.shape[2:]
 
-        image_features = self.mean(x)
-        image_features = self.conv(image_features)
-        image_features = F.upsample(image_features, size=size, mode="bilinear")
+        if self.global_pool:
+            image_features = self.mean(x)
+            image_features = self.conv(image_features)
+            image_features = F.upsample(image_features, size=size, mode="bilinear")
+        else:
+            # local 1x1 on the full map: same conv, same shape out, no global pooling
+            image_features = self.conv(x)
 
         atrous_block1 = self.atrous_block1(x)
 
@@ -180,6 +191,7 @@ class UNet_aspp_asff(nn.Module):
         bilinear: bool = False,
         base_c: int = 64,
         gpu_ids=[],
+        aspp_global_pool: bool = True,
     ):
         super(UNet_aspp_asff, self).__init__()
         self.in_channels = in_channels
@@ -204,10 +216,11 @@ class UNet_aspp_asff(nn.Module):
         # self.aspp2 = ASPP(64,64)
         # self.aspp3 = ASPP(128,128)
         # self.aspp4 = ASPP(256,256)
-        self.aspp1 = ASPP(64, 64)
-        self.aspp2 = ASPP(128,128,)
-        self.aspp3 = ASPP(256,256,)
-        self.aspp4 = ASPP(512, 512)
+        self.aspp_global_pool = aspp_global_pool
+        self.aspp1 = ASPP(64, 64, global_pool=aspp_global_pool)
+        self.aspp2 = ASPP(128, 128, global_pool=aspp_global_pool)
+        self.aspp3 = ASPP(256, 256, global_pool=aspp_global_pool)
+        self.aspp4 = ASPP(512, 512, global_pool=aspp_global_pool)
         self.asff_0 = ASFF(level=0)
         self.asff_1 = ASFF(level=1)
         self.asff_2 = ASFF(level=2)

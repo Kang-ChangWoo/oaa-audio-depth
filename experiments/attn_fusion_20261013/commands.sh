@@ -131,6 +131,13 @@ tests)
 screen)   # screen <gpu> <EXP> <rep|mp3d> [seed]
   GPU="$2"; EXP="$3"; DS="$4"; SEED="${5:-0}"
   [ "$GPU" = "4" ] && { echo "refusing GPU 4: confirmed faulty 2026-10-13"; exit 1; }
+  # DIAGNOSTIC ESCAPE HATCH (2026-10-16, approved). One EXP name only. Everything about the cell
+  # -- args, naming, out-dir, prereg, dedup -- lives in that script, not here, so this file keeps
+  # its single responsibility (OAA attnfus arms) and the blast radius stays at these three lines.
+  # The cell is OUR modification of the EchoDiffusion baseline and is NOT a comparison-table row.
+  if [ "$EXP" = "ecoglobaloff" ]; then
+    exec bash /root/local1/changwoo/ecoglobal_20261016/run_ecoglobaloff.sh "$GPU"
+  fi
   V="$(variant_flags "$EXP")"; [ "$V" = "UNKNOWN" ] && { echo "unknown EXP $EXP"; exit 1; }
   case "$DS" in
     rep)  DM=data_0422 ;;

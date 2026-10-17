@@ -69,6 +69,11 @@ def main():
     p.add_argument("--cide-cache", default="")   # cache_cide/*.npy — precomputed wav2vec2 embeddings (tools/build_cide_cache.py)  # faithful=as in the original (128x128 + post-hoc upsample), enhanced=improved port (earlier round)
     p.add_argument("--max-depth", type=float, default=10.0)
     p.add_argument("--out-dir", default="comparison")
+    # DIAGNOSTIC (2026-10-16): off makes ASPP's fifth branch local (1x1 on the full map)
+    # instead of global (avgpool -> 1x1 -> upsample). Params and state_dict keys unchanged.
+    # This is OUR modification of a baseline model, for the global-path attribution test;
+    # a run with "off" is DIAGNOSTIC ONLY and must not be cited as an EchoDiffusion row.
+    p.add_argument("--aspp-global-pool", default="on", choices=["on", "off"])
     a = p.parse_args()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
     device = torch.device("cuda")
@@ -80,7 +85,8 @@ def main():
     va = _DM.spec_wave_loader("val", 12, False, a.num_workers, a.mode, **ww)
     wave_ch = in_ch if a.wave_mode == "all" else 2
     model = EchoDiffusionDepth(in_ch=in_ch, wave_mode="none" if a.wave_mode == "none" else "cide",
-                               wave_ch=wave_ch, faithful=(a.port == "faithful")).to(device)
+                               wave_ch=wave_ch, faithful=(a.port == "faithful"),
+                               aspp_global_pool=(a.aspp_global_pool == "on")).to(device)
     cfg = dict(vars(a)); cfg["model"] = "echodiffusion"; cfg["amp"] = "bf16" if _BF16 else "fp32"
     tot = sum(x.numel() for x in model.parameters()); trn = sum(x.numel() for x in model.parameters() if x.requires_grad)
     print(f"[cfg] {cfg}", flush=True)

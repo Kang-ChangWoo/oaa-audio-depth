@@ -159,7 +159,7 @@ class EchoDiffusionEncoder(nn.Module):
     """
 
     def __init__(self, in_ch=2, out_dim=1024, ldm_prior=(32, 64, 256), emb_dim=768,
-                 wave_mode="cide", wave_ch=2):
+                 wave_mode="cide", wave_ch=2, aspp_global_pool=True):
         super().__init__()
         self.wave_mode = wave_mode
 
@@ -188,7 +188,7 @@ class EchoDiffusionEncoder(nn.Module):
             self.cide_module = CIDE(emb_dim, in_wave=wave_ch)
 
         # spec -> latents branch (in_conv now honors in_ch, see ASPP_ASFF.py)
-        self.aspp_asff = UNet_aspp_asff(in_channels=in_ch)
+        self.aspp_asff = UNet_aspp_asff(in_channels=in_ch, aspp_global_pool=aspp_global_pool)
         # BUG-FIX (a): adapt aspp_asff's 128-ch output to the SD-UNet in_channels=512.
         self.latent_adapter = nn.Conv2d(128, 512, kernel_size=1)
 
@@ -302,7 +302,7 @@ class EchoDiffusionDepth(nn.Module):
         returns: (B, 1, 256, 512) depth in [0, 1]
     """
 
-    def __init__(self, in_ch=2, wave_mode="cide", wave_ch=2, faithful=False):
+    def __init__(self, in_ch=2, wave_mode="cide", wave_ch=2, faithful=False, aspp_global_pool=True):
         super().__init__()
         self.in_ch = in_ch
         self.wave_ch = wave_ch
@@ -315,8 +315,10 @@ class EchoDiffusionDepth(nn.Module):
         channels_in = embed_dim * 8   # 1536
         channels_out = embed_dim      # 192
 
+        self.aspp_global_pool = aspp_global_pool
         self.encoder = EchoDiffusionEncoder(in_ch=in_ch, out_dim=channels_in,
-                                            wave_mode=wave_mode, wave_ch=wave_ch)
+                                            wave_mode=wave_mode, wave_ch=wave_ch,
+                                            aspp_global_pool=aspp_global_pool)
         self.decoder = Decoder(channels_in, channels_out)
 
         self.last_layer_depth = nn.Sequential(
