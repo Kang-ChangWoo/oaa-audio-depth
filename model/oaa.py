@@ -39,6 +39,41 @@ Architecture repairs (`archfix_` campaign, 2026-10-16; construction-time, defaul
                rotated ray direction expanded in the real spherical harmonics of degree <= 4, 25
                coefficients, plus the 2 remaining scalars => 27 inputs). A fixed basis: it adds no
                parameters of its own, only the wider first `bias_mlp` layer.
+
+Mid-band structure variants (2026-10-17; construction-time, default off => reference model). Both
+target the 3-6 m band, which carries 11.1 % of the Replica pixel weight and 36-51 % of the weighted
+squared error, and whose ray-grid resolution oracle (0.3077) explains only 42 % of our 0.7283:
+  pose_reinject  the per-observation pose code is re-added before each `InterMicAttn` block,
+               through one zero-initialised per-channel gamma per fusion round. The reference
+               injects the pose code ONCE, into the coarse tokens in `_encode`; after that the only
+               pose pathway through the fusion stack is `CondSelfAttn`'s AdaLN, and the
+               inter-observation block -- the one site where the N observations are compared
+               against each other, and therefore where the ear identity matters most -- has no pose
+               conditioning at all. `--no-pose-emb` alone costs RMSE +12.56 % and mid +19.46 %,
+               three times any other switch, and every pose experiment so far has REMOVED pose;
+               this is the first one that adds it. gamma = 0 at init => the added term is exactly
+               0.0, so the switch is bit-identical when turned on.
+               NOT included, and the reason is measured: the fine ray-lift query is pose-blind too
+               (one shared tensor broadcast over every observation), but any parameter placed there
+               sits behind the zero-initialised `fine_to_dec` conv, whose gradient to the whole fine
+               branch is exactly W^T g = 0 at step 0 -- the cold start `fine_layerscale` exists to
+               repair. A gamma there measured a dead gradient at step 0 at N = 2/4/8 and was
+               dropped rather than shipped unvalidated; it only becomes testable together with
+               `--fine-layerscale`.
+  geo_ray_gain   a per-(ray, head) multiplicative gain on the cross-attention OUTPUT, predicted
+               OUTSIDE the softmax from [mean over observations of the geometry features,
+               ray direction (3)] by a single zero-initialised `nn.Linear`, read as `1 + Linear(x)`.
+               This is the only pathway in the model that can change the TOTAL magnitude a ray
+               reads out. Distinct from its three relatives: the pre-softmax geometry bias can only
+               redistribute a mass pinned to 1; GeoFiLM scales the post-softmax probabilities
+               per (ray, OBSERVATION, head), so it both reweights observations against each other
+               and changes the total; this gain is applied after the sum over observations and
+               tokens, so it can change ONLY the total and cannot redistribute anything. `ray_gate`
+               sits in the same position but is driven by `q_ln` (a per-ray query prior), and it sat
+               flat at 1.0 in 13 of 14 runs; this one is driven by geometry. Deliberately NOT driven
+               by logsumexp: the measured per-band mean lse is 10.179 / 10.201 / 10.146
+               (near/mid/far) against band errors of 0.160 / 1.090 / 1.978, so lse is flat where the
+               error is 12.4x apart and would fail as a distance sensor by construction.
 Optional runtime argument (no parameters, no effect when omitted):
   forward(..., obs_valid=(B,N) bool)   explicit observation-validity masking of the inter-observation
                keys, the ray-cross keys/values and the fine-lift mean.
@@ -368,7 +403,7 @@ class RayMicAttn(nn.Module):
                  view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
                  ray_gate_mode="scalar", ray_gate_init=0.0,
                  registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False, film_lse=False):
+                 geo_value_film=False, film_lse=False, geo_ray_gain=False):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
@@ -473,6 +508,37 @@ class RayMicAttn(nn.Module):
                 "--film-lse adds a column to the GeoFiLM film input, so it requires "
                 "--geo-value-film; refusing to build a gate with nothing to gate")
             self.film_lse_w = nn.Parameter(torch.zeros(heads))
+        # ---- ray output-magnitude path (--geo-ray-gain). A per-(ray, head) scalar multiplying the
+        # cross-attention OUTPUT, i.e. applied AFTER the sum over observations and tokens. It is the
+        # only parameter in the model that can address the TOTAL magnitude a ray reads out:
+        # `softmax(logits) @ V` normalises per ray, so a far ray with nothing to hear still emits a
+        # full-magnitude vector. Measured symptom: attention output norm falls only 2.6 %
+        # (near 4.433 -> far 4.319) while the band error rises 12.4x.
+        #
+        # Input is per-RAY, never per-observation -- that is exactly what separates it from GeoFiLM.
+        # GeoFiLM multiplies the post-softmax probabilities per (ray, observation, head), so it
+        # reweights the observations against each other AND changes the total; this one is applied
+        # after that sum, so it changes the total and nothing else.
+        #
+        # The per-ray feature is [mean over observations of the geometry features (gf),
+        # ray direction (3)]. The direction columns are not redundant: for a symmetric rig the
+        # observation mean collapses almost everything. At r8 (yaws 0/90/180/270, each ear once) the
+        # mean rotation matrix is exactly zero and the two ear columns cancel pairwise, so
+        # `feats.mean(1)` is [0, dy, 0, 0, 0]; at r2 (both yaw 0, opposite ears) it is
+        # [dx, dy, dz, 0, 0]. Without the raw direction the gain would have one live input at r8.
+        #
+        # The mean is over ALL observations, NOT a masked mean: the gain then does not read
+        # obs_valid at all, which is what keeps `--subset-aug`'s masking invariance exact (the same
+        # property GeoFiLM has). Zero weight AND zero bias => gain is exactly 1.0 and `x * 1.0` is
+        # exact in IEEE-754, so turning the switch on moves no bit at init.
+        self.geo_ray_gain = bool(geo_ray_gain)
+        if self.geo_ray_gain:
+            assert use_bias, (
+                "--geo-ray-gain is driven by the SAME geometry features as the pre-softmax bias; "
+                "with --no-geo-bias those features are never computed. Refusing the combination")
+            self.ray_gain = nn.Linear(gf + 3, heads)
+            nn.init.zeros_(self.ray_gain.weight)
+            nn.init.zeros_(self.ray_gain.bias)
         if view_fusion == "hier-geo":
             self.route_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
@@ -694,6 +760,22 @@ class RayMicAttn(nn.Module):
                         self.stats["reg_mass_per_head"] = rm.mean((0, 2)).cpu()
         else:
             out_head = self._hier_fuse(logits, V, N, M, feats, kv_keep)
+        if self.geo_ray_gain:
+            # (R,N,gf) -> (R,gf) over observations, concatenated with the raw ray direction, then
+            # one Linear to (R,h) and a broadcast against (B,h,R,dk). Applied BEFORE ray_gate; the
+            # two multipliers commute and `* 1.0` is exact, so the order cannot affect the gate.
+            rf = torch.cat([feats.mean(1), ray_dir3.to(feats.dtype)], -1)       # (R, gf+3)
+            rg = (1.0 + self.ray_gain(rf)).t().unsqueeze(0).unsqueeze(-1)       # (1,h,R,1)
+            out_head = out_head * rg.to(out_head.dtype)
+            if self.collect_stats:
+                with torch.no_grad():
+                    g32 = rg.detach().float().squeeze(0).squeeze(-1)            # (h,R)
+                    self.stats.update(ray_gain_mean=g32.mean().item(), ray_gain_std=g32.std().item(),
+                                      ray_gain_min=g32.min().item(), ray_gain_max=g32.max().item())
+                    self.stats["ray_gain_mean_per_head"] = g32.mean(1).cpu()
+                    # per-ray, head-averaged: the only shape from which "does the gain fall with
+                    # distance" can be answered post hoc against the ERP ground truth
+                    self.stats["ray_gain_per_ray"] = g32.mean(0).cpu()
         if self.ray_gate:
             gate = 2.0 * torch.sigmoid(self.gate_proj(q_ln))               # in (0,2); =1 at bias 0
             if self.ray_gate_mode == "scalar":
@@ -762,7 +844,8 @@ class OAAv2Depth(nn.Module):
                  logit_scale_init=0.0, geo_scale_init=0.0, ray_gate_mode="scalar",
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
                  fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False, film_lse=False, ffn_swiglu="off"):
+                 geo_value_film=False, film_lse=False, ffn_swiglu="off",
+                 pose_reinject=False, geo_ray_gain=False):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
         self.ffn_swiglu = ffn_swiglu
@@ -782,6 +865,13 @@ class OAAv2Depth(nn.Module):
             assert not (geo_value_film or film_lse), (
                 "--no-cross removes RayMicAttn, so --geo-value-film / --film-lse have no effect; "
                 "refusing the combination instead of silently ignoring it")
+            assert not geo_ray_gain, (
+                "--no-cross removes RayMicAttn, so --geo-ray-gain has no output to scale; "
+                "refusing the combination instead of silently ignoring it")
+        # pose re-injection and the pose ablation are the same pathway read in opposite directions
+        assert not (pose_reinject and no_pose_emb), (
+            "--pose-reinject re-states the pose code that --no-pose-emb removes; the two are the "
+            "same pathway in opposite directions. Refusing the combination")
         self.qk_norm, self.ray_gate, self.view_fusion = qk_norm, ray_gate, view_fusion
         # ablations: pathways removed at construction; defaults keep the reference behaviour
         self.no_pose_emb = no_pose_emb    # heading/ear embedding not added to tokens (+AdaLN cond zeroed)
@@ -862,7 +952,32 @@ class OAAv2Depth(nn.Module):
                                   ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init,
                                   registers=registers, scene_registers=scene_registers,
                                   geo_basis=geo_basis, geo_value_film=geo_value_film,
-                                  film_lse=film_lse)
+                                  film_lse=film_lse, geo_ray_gain=geo_ray_gain)
+        # ---- pose re-injection (--pose-reinject). The reference adds `pose_emb(pose_feat)` to the
+        # coarse tokens ONCE, in `_encode`. After that the pose reaches the fusion stack only
+        # through `CondSelfAttn`'s AdaLN, which conditions each observation on ITSELF;
+        # `InterMicAttn`, which attends the SAME token position across the N observations and is
+        # therefore the one place where the observations are compared against each other, has no
+        # pose conditioning at all. One per-channel gamma per round on the shared learnable pose
+        # code: `x + gamma * pose_code`, gamma = 0 adds exactly 0.0, so the switch is bit-identical
+        # at init, and dL/dgamma = <grad, pose_code> is non-zero, so it learns from step 0.
+        #
+        # Two alternatives rejected on measurement, both recorded on purpose:
+        #   * the fine ray-lift query is pose-blind as well, and a gamma there is bit-identical at
+        #     init but has a gradient of exactly 0.0 at step 0 at N = 2/4/8, because `fine_to_dec`
+        #     is zero-initialised and passes W^T g = 0 back into the whole fine branch. That is the
+        #     cold start `fine_layerscale` repairs, so the site is out of scope until it is combined
+        #     with that switch.
+        #   * an INDEPENDENT `nn.Linear(3, C)` per site would let each round learn its own pose code
+        #     rather than a channel-wise rescaling of the shared one, which is strictly more
+        #     expressive -- but at (3*256 + 256) * 2 = 2,048 parameters against 512 here it breaks
+        #     the standing rule to re-examine anything past a few hundred. The limitation is real:
+        #     the re-injected direction is tied to the single shared `pose_emb` output, and only its
+        #     per-channel scale is free.
+        self.pose_reinject = bool(pose_reinject)
+        if self.pose_reinject:
+            # torch.zeros draws no RNG, so every later init is unchanged
+            self.pose_rein = nn.ParameterList([nn.Parameter(torch.zeros(C)) for _ in range(rounds)])
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):
@@ -939,9 +1054,16 @@ class OAAv2Depth(nn.Module):
         cond = self.pose_emb(pose_feat).unsqueeze(0).expand(B, -1, -1).reshape(B * self.nv, self.C)
         if self.no_pose_emb:
             cond = torch.zeros_like(cond)
-        for intra, inter in zip(self.intra, self.inter):                  # alternating attention
+        # (nv,C) pose code for --pose-reinject, shared by every round. `pose_emb` is already
+        # evaluated twice in the reference forward, so this is a third evaluation only when the
+        # switch is on, and it draws no RNG.
+        pose_code = self.pose_emb(pose_feat) if self.pose_reinject else None
+        for r, (intra, inter) in enumerate(zip(self.intra, self.inter)):  # alternating attention
             B_, N, M, C = F4.shape
             F4 = intra(F4.reshape(B_ * N, M, C), cond).reshape(B_, N, M, C)
+            if pose_code is not None:
+                # gamma = 0 at init -> the added term is exactly 0.0 -> bitwise no-op
+                F4 = F4 + (self.pose_rein[r] * pose_code).view(1, N, 1, C)
             F4 = inter(F4, obs_valid)
         if self.no_cross:                                                 # ablation (a): mean over observations
             if not _mask_engaged(obs_valid):

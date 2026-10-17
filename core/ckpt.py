@@ -100,7 +100,13 @@ def build(args, DM):
                    # --film-lse run fails strict load and eval.py drops the row silently.
                    film_lse=args.get("film_lse", False) or False,
                    # SwiGLU in the erp blocks; absent in every earlier checkpoint -> reference GELU
-                   ffn_swiglu=args.get("ffn_swiglu") or "off")
+                   ffn_swiglu=args.get("ffn_swiglu") or "off",
+                   # mid-band structure variants (2026-10-17); absent in every earlier checkpoint
+                   # -> reference. Same reason as the GeoFiLM line above: without these two a
+                   # trained cell fails strict load and eval.py drops the row with a bare
+                   # `[skip <run>]`, leaving the baselines standing alone in the table.
+                   pose_reinject=args.get("pose_reinject", False) or False,
+                   geo_ray_gain=args.get("geo_ray_gain", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

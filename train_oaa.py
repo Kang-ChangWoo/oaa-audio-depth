@@ -97,6 +97,13 @@ def main():
     # D1/D2 (2026-10-16): SwiGLU in the 4 erp refinement blocks. "wide" keeps hidden 2C and breaks
     # the 15.45 M ceiling (approved); "matched" shrinks hidden so the parameter count is neutral.
     p.add_argument("--ffn-swiglu", default="off", choices=list(SWIGLU_MODES))
+    # mid-band structure variants (2026-10-17). Both default off => reference model.
+    # re-add the per-observation pose code before each inter-observation block and on the fine
+    # ray-lift query, each through its own zero-init per-channel gamma (+(rounds+1)*dim params)
+    p.add_argument("--pose-reinject", action="store_true")
+    # per-(ray, head) gain on the cross-attention output, predicted outside the softmax from the
+    # observation-mean geometry features plus the ray direction (+(gf+3)*heads + heads params)
+    p.add_argument("--geo-ray-gain", action="store_true")
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -163,7 +170,8 @@ def main():
                        fine_layerscale=a.fine_layerscale, registers=a.registers,
                        scene_registers=a.scene_registers, geo_basis=a.geo_basis,
                        geo_value_film=a.geo_value_film, film_lse=a.film_lse,
-                       ffn_swiglu=a.ffn_swiglu).to(device)
+                       ffn_swiglu=a.ffn_swiglu,
+                       pose_reinject=a.pose_reinject, geo_ray_gain=a.geo_ray_gain).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every
