@@ -109,7 +109,16 @@ def build(args, DM):
                    geo_ray_gain=args.get("geo_ray_gain", False) or False,
                    # value-dispersion readout (2026-10-17); absent in every earlier checkpoint
                    # -> reference. Same strict-load reason as the lines above.
-                   value_moments=args.get("value_moments", False) or False)
+                   value_moments=args.get("value_moments", False) or False,
+                   # arrival-time / selection structure variants (2026-10-17); absent in every
+                   # earlier checkpoint -> reference. Same strict-load reason as the lines above:
+                   # a trained cell rebuilt without its switch fails load_state_dict(strict=True)
+                   # and eval.py drops the row with a bare `[skip <run>]`, so the cell is
+                   # UNSCOREABLE after a full training run. That is the hole 11b7202 had to patch.
+                   tof_value_code=args.get("tof_value_code", False) or False,
+                   tof_tau_inject=args.get("tof_tau_inject", False) or False,
+                   cross_reread=args.get("cross_reread", False) or False,
+                   geo_key_coupling=args.get("geo_key_coupling", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

@@ -109,6 +109,20 @@ def make_parser():
     # per-(ray, head) gain on the cross-attention output, predicted outside the softmax from the
     # observation-mean geometry features plus the ray direction (+(gf+3)*heads + heads params)
     p.add_argument("--geo-ray-gain", action="store_true")
+    # arrival-time / selection structure variants (2026-10-17). All four default off => reference.
+    # attention-weighted fixed sin/cos time code added to the value readout, per-(head, channel)
+    # zero-init gain (+dim params)
+    p.add_argument("--tof-value-code", action="store_true")
+    # the attention-weighted arrival time tau_bar (one scalar per ray, in metres) Fourier-lifted
+    # and sent to the block output through one zero-init affine (+(2*16+1)*dim params)
+    p.add_argument("--tof-tau-inject", action="store_true")
+    # read the observation tokens a SECOND time with the refined rays as the query, same ray_mic
+    # weights, mixed in through a zero-init per-channel gamma (+dim params)
+    p.add_argument("--cross-reread", action="store_true")
+    # geometry features + raw ray direction -> per-head key-space vector, inner product with the
+    # keys, added to the logits, so geometry can select a token and not only an observation
+    # (+(gf+3)*dim params)
+    p.add_argument("--geo-key-coupling", action="store_true")
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -190,7 +204,10 @@ def main():
                        geo_value_film=a.geo_value_film, film_lse=a.film_lse,
                        ffn_swiglu=a.ffn_swiglu,
                        pose_reinject=a.pose_reinject, geo_ray_gain=a.geo_ray_gain,
-                       value_moments=a.value_moments).to(device)
+                       value_moments=a.value_moments,
+                       tof_value_code=a.tof_value_code, tof_tau_inject=a.tof_tau_inject,
+                       cross_reread=a.cross_reread,
+                       geo_key_coupling=a.geo_key_coupling).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every

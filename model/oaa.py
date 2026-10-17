@@ -115,6 +115,19 @@ IDENTITY_INIT_PARAM_SUFFIXES = ("ray_mic.logit_scale", "ray_mic.geo_scale",
                                 "fine_to_dec.weight", "fine_to_dec.bias")
 _QK_LOGSCALE_CLIP = 4.0              # exp() multiplier bounded to [1.8e-2, 5.5e1]
 _QK_EPS = 1e-6
+# ---- time-of-flight constants for --tof-value-code / --tof-tau-inject (2026-10-17).
+# data_0422.py:14-15,32: 48 kHz, 279.9 samples per metre of ROUND TRIP, input window 2799 samples
+# = exactly 10 m. The (257,T) spectrogram is resized to (256,512) and the encoder halves it four
+# times, so the coarse token grid is 16 (frequency) x 32 (time) and ONE TIME COLUMN IS
+# 10/32 = 0.3125 m. `h.flatten(2)` is row-major over (lh, lw), so token m sits in time column
+# m % lw. That identity -- token time axis == depth axis -- is the whole premise of both switches.
+_TOF_RANGE_M = 10.0
+# Fourier ladder for the scalar arrival time. Log-spaced in cycles per metre, from half a cycle
+# across the full 10 m window up to one cycle per 0.625 m = two time columns, i.e. the Nyquist
+# limit of the 0.3125 m column grid. Going above that would encode a resolution the tokens do not
+# carry. Closed form (not torch.logspace) so the buffer is identical on every machine.
+_TOF_FOURIER_K = 16
+_TOF_F_MIN, _TOF_F_MAX = 0.05, 1.6
 # Tests flip this to False to exercise the masked code path on all-valid input; in production the
 # short-circuit is what makes "obs_valid all True" bit-identical to "obs_valid=None".
 _SHORTCIRCUIT_ALL_VALID = True
@@ -179,6 +192,38 @@ def _attention_value_std(prob, values, kv_keep=None):
 _ALL_POSES = [(0.0, -1.0), (0.0, 1.0), (math.pi / 2, 1.0), (-math.pi / 2, -1.0)]   # [0L, 0R, 90R, 270L]
 _POOL8 = [(0.0, -1.0), (0.0, 1.0), (math.pi / 2, -1.0), (math.pi / 2, 1.0),
           (math.pi, -1.0), (math.pi, 1.0), (-math.pi / 2, -1.0), (-math.pi / 2, 1.0)]   # [0L,0R,90L,90R,180L,180R,270L,270R]
+
+
+def _tof_freqs(k):
+    """k log-spaced spatial frequencies in cycles per metre, _TOF_F_MIN -> _TOF_F_MAX, float64.
+
+    Computed in closed form rather than with torch.logspace so the value is reproducible across
+    torch builds; the caller casts it to the module dtype.
+    """
+    i = torch.arange(k, dtype=torch.float64)
+    return _TOF_F_MIN * (_TOF_F_MAX / _TOF_F_MIN) ** (i / max(k - 1, 1))
+
+
+def _tof_column_metres(lh, lw):
+    """Round-trip arrival time, in metres, of the time column each of the lh*lw tokens sits in.
+
+    Token m -> column m % lw -> centre (m % lw + 0.5) * (_TOF_RANGE_M / lw). float64.
+    """
+    col = torch.arange(lh * lw, dtype=torch.float64) % lw
+    return (col + 0.5) * (_TOF_RANGE_M / lw)
+
+
+def _tof_sincos(tau_m, width):
+    """Fixed sin/cos code of the per-token arrival time -> (len(tau_m), width), float64.
+
+    width//2 frequencies, sines first then cosines. No parameters: this is a positional code of
+    the DEPTH axis, deliberately content-independent, so what the readout learns is only how much
+    of it to add (the per-channel gain), never what "4 metres" looks like.
+    """
+    assert width % 2 == 0, f"tof code width {width} must be even (sin/cos pairs)"
+    f = _tof_freqs(width // 2)                                   # (width/2,) cycles per metre
+    ang = 2 * math.pi * tau_m.unsqueeze(-1) * f.unsqueeze(0)     # (T, width/2)
+    return torch.cat([torch.sin(ang), torch.cos(ang)], -1)
 
 
 def _dir_pe(h, w, device):
@@ -434,7 +479,8 @@ class RayMicAttn(nn.Module):
                  ray_gate_mode="scalar", ray_gate_init=0.0,
                  registers=0, scene_registers=False, geo_basis="raw",
                  geo_value_film=False, film_lse=False, geo_ray_gain=False,
-                 value_moments=False):
+                 value_moments=False, tof_value_code=False, tof_tau_inject=False,
+                 geo_key_coupling=False, tok_lh=LH, tok_lw=LW):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
@@ -584,6 +630,71 @@ class RayMicAttn(nn.Module):
         if view_fusion == "hier-geo":
             self.route_mlp = nn.Sequential(nn.Linear(gf, 64), nn.GELU(), nn.Linear(64, heads))
             nn.init.zeros_(self.route_mlp[-1].weight); nn.init.zeros_(self.route_mlp[-1].bias)
+        # ---- arrival-time readout switches (--tof-value-code, --tof-tau-inject, 2026-10-17).
+        # Both read the SAME quantity the softmax already computed -- the attention mass per time
+        # column -- and hand its first moment to the decoder as an explicit, content-independent
+        # number. Nothing else in the model does: the time axis enters the values only through
+        # `tf_pe`, which is a learnable code that LayerNorm, the v projection and two fusion rounds
+        # have already mixed into the content by the time the readout sees it. A depth estimate as
+        # simple as "the weighted mean arrival time" therefore has no clean path to the head.
+        #
+        # They are registered against the TOKEN grid (lh, lw), which the caller passes in; the
+        # module cannot infer it, because M only arrives at forward time and lh*lw does not factor.
+        self.tok_lh, self.tok_lw = int(tok_lh), int(tok_lw)
+        self.tof_value_code = bool(tof_value_code)
+        self.tof_tau_inject = bool(tof_tau_inject)
+        if self.tof_value_code or self.tof_tau_inject:
+            assert view_fusion == "global", (
+                f"--tof-value-code / --tof-tau-inject read the post-softmax probabilities of the "
+                f"single global softmax; view_fusion={view_fusion} decomposes it per observation "
+                f"and never materialises them. Refusing the combination instead of guessing")
+            # non-persistent: a fixed function of (lh, lw), so it must not enter state_dict and
+            # cannot make an existing checkpoint fail strict loading
+            self.register_buffer("tof_tau_m", _tof_column_metres(self.tok_lh, self.tok_lw).float(),
+                                 persistent=False)
+        if self.tof_value_code:
+            # Fixed sin/cos code of the arrival time, dk wide, SHARED by the heads; only the gain
+            # is learned, one per (head, channel) = +C. torch.zeros draws no RNG, so every later
+            # init -- and therefore every shared weight at a given seed -- is unchanged, which is
+            # what keeps this cell a pure mechanism comparison against its control seed.
+            self.register_buffer("tof_code",
+                                 _tof_sincos(_tof_column_metres(self.tok_lh, self.tok_lw),
+                                             self.dk).float(), persistent=False)
+            self.tof_gain = nn.Parameter(torch.zeros(heads, self.dk))
+        if self.tof_tau_inject:
+            # tau_bar, the attention-weighted arrival time, is ONE SCALAR PER RAY: a linear
+            # estimator of depth. Fourier-lift it (a raw metre scalar against LayerNorm'd features
+            # would be badly scaled) and send it to C with a single zero-init affine.
+            #
+            # Deliberately NO separate zero-init gamma on top, although the brief asked for one:
+            # with both a zero gamma and a zero affine the affine's own gradient at step 0 is
+            # gamma * (...) = exactly 0, i.e. the dead-branch failure mode that cost --pose-reinject
+            # its fine site (test_g3b there). A zero-init affine ALONE is bit-identical at init
+            # (0 @ x + 0 == 0.0) and has a live gradient (dL/dW = g (x) feat, dL/db = g), so it is
+            # the form that satisfies both halves of the gate. Measured in test_g3c here.
+            self.register_buffer("tau_freq", _tof_freqs(_TOF_FOURIER_K).float(), persistent=False)
+            self.tau_w = nn.Parameter(torch.zeros(2 * _TOF_FOURIER_K, C))
+            self.tau_b = nn.Parameter(torch.zeros(C))
+        # ---- geometry-key coupling (--geo-key-coupling, 2026-10-17). The reference geometry bias
+        # `bmic` is (R, N, h) and is COPIED across the M tokens of an observation (see the expand
+        # below), so geometry can say "listen to this observation" but never "listen to this
+        # frequency row / this time column". Every relative that has been tried -- GeoFiLM,
+        # hier-geo routing, geo-ray-gain, the sh4 basis -- is the same per-(ray, observation, head)
+        # scalar in a different costume. This one sends the geometry into the KEY space and takes
+        # an inner product with the actual keys, so the term it adds to the logits is per TOKEN.
+        #
+        # Per head (R, N, h, dk), not head-shared: a head-shared map forces every head to look
+        # along the same geometric direction in key space, which is the restriction the per-head
+        # Q/K projections exist to avoid. Linear(gf+3, h*dk) without bias -- a bias would be a
+        # per-head constant over all tokens, which is exactly what `bias_mlp` already provides.
+        # The raw ray direction is concatenated for the same measured reason as --geo-ray-gain.
+        self.geo_key_coupling = bool(geo_key_coupling)
+        if self.geo_key_coupling:
+            assert use_bias, (
+                "--geo-key-coupling is driven by the SAME geometry features as the pre-softmax "
+                "bias; with --no-geo-bias those features are never computed. Refusing the "
+                "combination")
+            self.geo_key = nn.Parameter(torch.zeros(gf + 3, C))
         self.collect_stats = False        # diagnostics only; never read by the loss
         self.stats = {}
 
@@ -733,6 +844,16 @@ class RayMicAttn(nn.Module):
                 bmic = bmic * self._logscale(self.geo_scale).view(1, 1, -1)
             bfull = bmic.unsqueeze(2).expand(R, N, M, self.h).reshape(R, N * M, self.h)
             logits = logits + bfull.permute(2, 0, 1).unsqueeze(0)
+        if self.geo_key_coupling:
+            # [geometry features (gf), raw ray direction (3)] -> (R, N, h, dk) -> <g, K> per token.
+            # Zero weight => every element of `add` is a sum of exact zeros => exactly 0.0, and
+            # `logits + 0.0` moves no bit. dL/dW = sum (dL/dlogit) f (x) K is non-zero because the
+            # keys are not zero, so the one layer learns from step 0.
+            gin = torch.cat([feats, ray_dir3.to(feats.dtype).unsqueeze(1).expand(R, N, 3)], -1)
+            gk = (gin @ self.geo_key.to(feats.dtype)).view(R, N, self.h, self.dk)
+            Kn = K.reshape(B, self.h, N, M, self.dk)
+            add = torch.einsum("rnhd,bhnmd->bhrnm", gk.to(K.dtype), Kn)
+            logits = logits + add.reshape(B, self.h, R, N * M)
         kv_keep = None
         if _mask_engaged(obs_valid):
             kv_keep = obs_valid[:, :, None].expand(B, N, M).reshape(B, 1, 1, N * M)
@@ -811,6 +932,46 @@ class RayMicAttn(nn.Module):
                     self.stats["value_std_mean"] = dispersion.mean().item()
                     self.stats["moment_scale_absmean"] = self.moment_scale.abs().mean().item()
                     self.stats["moment_correction_rms"] = correction.float().square().mean().sqrt().item()
+        tau_term = None
+        if self.tof_value_code or self.tof_tau_inject:
+            # (B,h,R,N,M) view of the acoustic probabilities. Registers are excluded by
+            # construction: `p_tok` is already the token half of the joint softmax, so a ray that
+            # parks mass on a register contributes that much less here, which is the behaviour we
+            # want (abstaining should shrink the arrival-time term, not bias it).
+            p5 = p_tok.reshape(B, self.h, R, N, M)
+            if self.collect_stats:
+                with torch.no_grad():
+                    # attention mass per TIME COLUMN, head- and observation-averaged: (B,R,lw).
+                    # This is the P1 probe quantity (where on the depth axis a ray is listening)
+                    # and it is what tau_bar is the first moment of.
+                    cm = (p5.detach().float().sum((1, 3))
+                          .reshape(B, R, self.tok_lh, self.tok_lw).sum(2) / self.h)
+                    self.stats["tof_col_mass"] = cm.mean((0, 1)).cpu()
+                    self.stats["tof_col_mass_full"] = cm.cpu()
+        if self.tof_value_code:
+            # p @ E: the attention-weighted fixed time code. Same shape of operation as p @ V, but
+            # the "values" carry depth and nothing else. Per-(head, channel) zero-init gain, so the
+            # added term is exactly 0.0 at init and dL/dgain = g * (p@E) is live.
+            read = torch.einsum("bhrnm,md->bhrd", p5, self.tof_code.to(p5.dtype))
+            out_head = out_head + (self.tof_gain.view(1, self.h, 1, self.dk).to(read.dtype)
+                                   * read).to(out_head.dtype)
+            if self.collect_stats:
+                with torch.no_grad():
+                    self.stats["tof_read_rms"] = read.float().square().mean().sqrt().item()
+                    self.stats["tof_gain_absmean"] = self.tof_gain.abs().mean().item()
+        if self.tof_tau_inject:
+            # tau_bar (B,R) in metres: sum over heads / tokens of p * column centre, divided by the
+            # head count. self.h is a power of two, so the division is exact.
+            tau = torch.einsum("bhrnm,m->br", p5, self.tof_tau_m.to(p5.dtype)) / self.h
+            ang = 2 * math.pi * tau.unsqueeze(-1) * self.tau_freq.to(tau.dtype).view(1, 1, -1)
+            ff = torch.cat([torch.sin(ang), torch.cos(ang)], -1)            # (B,R,2K)
+            tau_term = ff @ self.tau_w.to(ff.dtype) + self.tau_b.to(ff.dtype)
+            if self.collect_stats:
+                with torch.no_grad():
+                    t32 = tau.detach().float()
+                    self.stats.update(tau_bar_mean=t32.mean().item(), tau_bar_std=t32.std().item(),
+                                      tau_bar_min=t32.min().item(), tau_bar_max=t32.max().item())
+                    self.stats["tau_bar_per_ray"] = t32.mean(0).cpu()
         if self.geo_ray_gain:
             # (R,N,gf) -> (R,gf) over observations, concatenated with the raw ray direction, then
             # one Linear to (R,h) and a broadcast against (B,h,R,dk). Applied BEFORE ray_gate; the
@@ -855,7 +1016,12 @@ class RayMicAttn(nn.Module):
                     self.stats["geo_scale"] = self._logscale(self.geo_scale).detach().float().cpu()
         out = out_head.transpose(1, 2).reshape(B, R, C)
         h = q_in + self.o(out)
-        return h + self.ffn(h)
+        h = h + self.ffn(h)
+        if tau_term is not None:
+            # added to the block OUTPUT, not to `out`: the point of the switch is to hand the
+            # decoder a depth estimate that has not been through another projection and FFN.
+            h = h + tau_term.to(h.dtype)
+        return h
 
 
 def _make_up(C, norm, lh, lw, deep=True, circular=False):
@@ -896,7 +1062,9 @@ class OAAv2Depth(nn.Module):
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
                  fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
                  geo_value_film=False, film_lse=False, ffn_swiglu="off",
-                 pose_reinject=False, geo_ray_gain=False, value_moments=False):
+                 pose_reinject=False, geo_ray_gain=False, value_moments=False,
+                 tof_value_code=False, tof_tau_inject=False, cross_reread=False,
+                 geo_key_coupling=False):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
         if value_moments and pose_reinject:
@@ -924,6 +1092,10 @@ class OAAv2Depth(nn.Module):
             assert not geo_ray_gain, (
                 "--no-cross removes RayMicAttn, so --geo-ray-gain has no output to scale; "
                 "refusing the combination instead of silently ignoring it")
+            assert not (tof_value_code or tof_tau_inject or geo_key_coupling or cross_reread), (
+                "--no-cross removes RayMicAttn, so --tof-value-code / --tof-tau-inject / "
+                "--geo-key-coupling / --cross-reread have no attention to read; refusing the "
+                "combination instead of silently ignoring it")
         # pose re-injection and the pose ablation are the same pathway read in opposite directions
         assert not (pose_reinject and no_pose_emb), (
             "--pose-reinject re-states the pose code that --no-pose-emb removes; the two are the "
@@ -1009,7 +1181,9 @@ class OAAv2Depth(nn.Module):
                                   registers=registers, scene_registers=scene_registers,
                                   geo_basis=geo_basis, geo_value_film=geo_value_film,
                                   film_lse=film_lse, geo_ray_gain=geo_ray_gain,
-                                  value_moments=value_moments)
+                                  value_moments=value_moments,
+                                  tof_value_code=tof_value_code, tof_tau_inject=tof_tau_inject,
+                                  geo_key_coupling=geo_key_coupling, tok_lh=lh, tok_lw=lw)
         # ---- pose re-injection (--pose-reinject). The reference adds `pose_emb(pose_feat)` to the
         # coarse tokens ONCE, in `_encode`. After that the pose reaches the fusion stack only
         # through `CondSelfAttn`'s AdaLN, which conditions each observation on ITSELF;
@@ -1035,6 +1209,28 @@ class OAAv2Depth(nn.Module):
         if self.pose_reinject:
             # torch.zeros draws no RNG, so every later init is unchanged
             self.pose_rein = nn.ParameterList([nn.Parameter(torch.zeros(C)) for _ in range(rounds)])
+        # ---- content-conditioned second read (--cross-reread, 2026-10-17). The reference query is
+        # `self.q + dir_mlp(dir6)`: a per-ray PRIOR that has never seen a spectrogram. It reads the
+        # observation tokens once, and the four `erp` blocks that follow mix rays with each other
+        # and never touch the audio again. So which tokens a ray reads is decided before the ray
+        # knows anything about what is in them.
+        #
+        # This re-runs the SAME `ray_mic` -- same weights, no new layer -- with the refined rays as
+        # the query, and mixes the result in through one zero-init per-channel gamma:
+        # `h + gamma * (h2 - h)`. +C parameters. Weight sharing is the point, not a saving: the map
+        # is already trained by the first read, so unlike the fine branch there is no cold start
+        # (`fine_to_dec`'s zero init is what made a gamma there dead at step 0; here `h2 - h` is a
+        # real non-zero tensor on the first step, so dL/dgamma = <g, h2-h> is alive).
+        #
+        # Known limitation, recorded: if the shared query map turns out to be wrong for a refined
+        # query, the repair is a Linear(C, C) query adapter at +65.8 k, which would be
+        # CAPACITY-CONFOUNDED against a 15.35 M control. This cell deliberately buys the cheap,
+        # unconfounded version first. Second note: `ray_mic.collect_stats` is written twice per
+        # forward when this is on, and the SECOND read wins -- any diagnostic that reads those
+        # stats is reading the re-read, not the first read.
+        self.cross_reread = bool(cross_reread)
+        if self.cross_reread:
+            self.reread_ls = nn.Parameter(torch.zeros(C))
 
     # ------------------------------------------------------------------ helpers
     def _pose_tensors(self, dev, view_pose=None):
@@ -1135,4 +1331,9 @@ class OAAv2Depth(nn.Module):
             h = h + self.glob_dir(dir6).unsqueeze(0)
         for blk in self.erp:
             h = blk(h)
+        if self.cross_reread:
+            # gamma = 0 at init -> `h + 0.0 * (h2 - h)` adds exactly 0.0 -> bitwise no-op
+            h2 = self.ray_mic(h, F4.reshape(B, self.nv * self.M, self.C), dir3, poses,
+                              self.M, obs_valid)
+            h = h + self.reread_ls * (h2 - h)
         return self._decode(h, fine, poses, obs_valid)
