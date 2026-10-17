@@ -148,6 +148,12 @@ def make_parser():
     # keys, added to the logits, so geometry can select a token and not only an observation
     # (+(gf+3)*dim params)
     p.add_argument("--geo-key-coupling", action="store_true")
+    # encoder time-axis tokenisation (H1, 2026-10-18). The last two ViewEncoder stages stride (2,1):
+    # frequency is halved, the time (= arrival-distance) axis is kept at 128 columns through
+    # stages 3-4 and mean-pooled to the reference 64 (fine tap) / 32 (tokens) at the interfaces.
+    # +0 parameters, same token grid, same fine tap; activations of those two stages grow 2x/4x.
+    # Default off => reference encoder, module for module.
+    p.add_argument("--enc-time-stride1", action="store_true")
     # far-field / RMSE-directed switches (2026-10-14). All default off => reference recipe, bit for bit.
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
@@ -238,7 +244,8 @@ def main():
                        value_moments=a.value_moments,
                        tof_value_code=a.tof_value_code, tof_tau_inject=a.tof_tau_inject,
                        cross_reread=a.cross_reread,
-                       geo_key_coupling=a.geo_key_coupling).to(device)
+                       geo_key_coupling=a.geo_key_coupling,
+                       enc_time_stride1=a.enc_time_stride1).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every

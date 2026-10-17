@@ -324,9 +324,11 @@ class _CircConvT2d(nn.ConvTranspose2d):
 
 
 class _ResBlk(nn.Module):
-    def __init__(self, ci, co, down=True, norm="group", circular=False):
+    def __init__(self, ci, co, down=True, norm="group", circular=False, stride=None):
         super().__init__()
-        s = 2 if down else 1
+        # `stride` overrides the (down -> 2, else 1) default with an explicit (freq, time) pair; used
+        # only by ViewEncoder's --enc-time-stride1 path. Left None, s is the reference int.
+        s = stride if stride is not None else (2 if down else 1)
         conv = _CircConv2d if circular else nn.Conv2d
         self.c1 = conv(ci, co, 3, s, 1); self.n1 = _norm(co, norm)
         self.c2 = conv(co, co, 3, 1, 1); self.n2 = _norm(co, norm)
@@ -341,9 +343,20 @@ class ViewEncoder(nn.Module):
     """Shared per-observation encoder: strided conv stem + residual downsampling to (lh, lw) tokens.
     Also taps the (2lh, 2lw) feature map ("fine" tokens) for the multi-scale decoder skip."""
     def __init__(self, C=256, ngf=64, in_ch=1, norm="group", lh=LH, lw=LW, enc_res=(256, 512),
-                 stem_stride1=False):
+                 stem_stride1=False, time_stride1_stages=0):
         super().__init__()
         self.enc_res = enc_res; self.stem_stride1 = stem_stride1
+        # time_stride1_stages (H1, 2026-10-18): the LAST k downsampling stages stride (2,1) instead of
+        # (2,2), i.e. they halve frequency but keep the time (= arrival-distance) axis. The token
+        # grid and the fine tap keep their reference shapes: the time axis is average-pooled back
+        # to 2*lw at the fine tap and to lw before the tokens (exact power-of-two means, no
+        # parameters). k=0 is the reference encoder, module for module; nothing below is touched.
+        # Why: the reference folds time 4x after the stem (hop-16 STFT frames 175 -> 512 px -> 32
+        # columns = 0.31 m per column); the two largest measured gains of this series (hop 160->16,
+        # stem stride 2->1) are both input-time-resolution changes, so the hypothesis is that the
+        # last two folds are where early-reflection evidence is lost. k=2 keeps 128 time columns
+        # (0.078 m) through stages 3 and 4 and pools only at the interfaces.
+        self.time_stride1_stages = int(time_stride1_stages)
         # stem_stride1: stride-1 stem on the native-resolution input instead of 2x-upsample + stride-2
         # (mathematically equivalent receptive field, no interpolation, 1/4 compute)
         self.stem = nn.Sequential(nn.Conv2d(in_ch, ngf // 2, 3, (1 if stem_stride1 else 2), 1), nn.GELU(),
@@ -352,11 +365,15 @@ class ViewEncoder(nn.Module):
         assert enc_res[0] // lh == enc_res[1] // lw == 2 ** stages, f"enc_res {enc_res} -> {lh}x{lw}"
         assert stages >= 2, "multi-scale decoder needs >=2 encoder stages (fine tap at (2lh,2lw))"
         chans = [ngf, ngf * 2, ngf * 4, C, C, C][:stages] + [C]
+        assert 0 <= self.time_stride1_stages <= stages, f"time_stride1_stages {time_stride1_stages} > {stages} stages"
         blocks = []
         for i in range(stages):
-            blocks += [_ResBlk(chans[i], chans[i], down=False, norm=norm), _ResBlk(chans[i], chans[i + 1], norm=norm)]
+            keep_t = i >= stages - self.time_stride1_stages                            # last k stages keep time
+            blocks += [_ResBlk(chans[i], chans[i], down=False, norm=norm),
+                       _ResBlk(chans[i], chans[i + 1], norm=norm, stride=((2, 1) if keep_t else None))]
         self.net = nn.Sequential(*blocks); self.C = C
         self.lh, self.lw = lh, lw
+        self.stages = stages
         self.fine_ch = chans[stages - 1]                                             # channels at the (2lh,2lw) tap
 
     def forward(self, x):
@@ -364,12 +381,29 @@ class ViewEncoder(nn.Module):
         if x.shape[-2:] != want:
             x = F.interpolate(x, size=want, mode="bilinear", align_corners=False)
         h = self.stem(x); ft = None
-        for blk in self.net:
+        if self.time_stride1_stages == 0:                                            # reference path, unchanged
+            for blk in self.net:
+                h = blk(h)
+                if h.shape[-2:] == (2 * self.lh, 2 * self.lw):                       # fine tap
+                    ft = h.flatten(2).transpose(1, 2)                                # (B, 4*lh*lw, fine_ch)
+            tok = h.flatten(2).transpose(1, 2)                                       # (B, lh*lw, C)
+            return tok, ft
+        # --enc-time-stride1: the stage index decides the tap (shapes no longer identify it), and the
+        # time axis is mean-pooled to the reference width at the two interfaces only.
+        for i, blk in enumerate(self.net):
             h = blk(h)
-            if h.shape[-2:] == (2 * self.lh, 2 * self.lw):                           # fine tap
-                ft = h.flatten(2).transpose(1, 2)                                    # (B, 4*lh*lw, fine_ch)
-        tok = h.flatten(2).transpose(1, 2)                                           # (B, lh*lw, C)
+            if i == 2 * (self.stages - 1) - 1:                                       # end of stage (stages-1): fine tap
+                assert h.shape[-2] == 2 * self.lh, f"fine tap height {h.shape[-2]} != {2 * self.lh}"
+                ft = self._pool_time(h, 2 * self.lw).flatten(2).transpose(1, 2)      # (B, 4*lh*lw, fine_ch)
+        assert h.shape[-2] == self.lh, f"token height {h.shape[-2]} != {self.lh}"
+        tok = self._pool_time(h, self.lw).flatten(2).transpose(1, 2)                 # (B, lh*lw, C)
         return tok, ft
+
+    @staticmethod
+    def _pool_time(h, w_out):
+        k = h.shape[-1] // w_out
+        assert k * w_out == h.shape[-1], f"time width {h.shape[-1]} not a multiple of {w_out}"
+        return h if k == 1 else F.avg_pool2d(h, (1, k), stride=(1, k))
 
 
 def _swiglu_hidden(C, mode):
@@ -1064,7 +1098,7 @@ class OAAv2Depth(nn.Module):
                  geo_value_film=False, film_lse=False, ffn_swiglu="off",
                  pose_reinject=False, geo_ray_gain=False, value_moments=False,
                  tof_value_code=False, tof_tau_inject=False, cross_reread=False,
-                 geo_key_coupling=False):
+                 geo_key_coupling=False, enc_time_stride1=False):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
         if value_moments and pose_reinject:
@@ -1111,7 +1145,11 @@ class OAAv2Depth(nn.Module):
         self.C = C; self.in_ch = in_ch; self.nv = nviews
         self.lh, self.lw, self.M = lh, lw, lh * lw; self.enc_res = enc_res
         self.max_depth_n = max_depth
-        self.enc = ViewEncoder(C, in_ch=in_ch, norm=norm, lh=lh, lw=lw, enc_res=enc_res, stem_stride1=stem_stride1)
+        # enc_time_stride1 (H1): the last two encoder stages keep the time axis; token grid, C and
+        # the (2lh,2lw) fine tap are unchanged, so nothing downstream of the encoder knows.
+        self.enc_time_stride1 = bool(enc_time_stride1)
+        self.enc = ViewEncoder(C, in_ch=in_ch, norm=norm, lh=lh, lw=lw, enc_res=enc_res, stem_stride1=stem_stride1,
+                               time_stride1_stages=(2 if enc_time_stride1 else 0))
         self.pose_emb = nn.Sequential(nn.Linear(3, C), nn.GELU(), nn.Linear(C, C))       # MLP_pose([sin, cos, ear])
         self.tf_pe = nn.Parameter(torch.zeros(1, self.M, C))                              # learnable TF PE
         self.q = nn.Parameter(torch.randn(1, self.M, C) * 0.02)                           # learnable panoramic queries

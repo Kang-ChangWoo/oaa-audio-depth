@@ -118,7 +118,12 @@ def build(args, DM):
                    tof_value_code=args.get("tof_value_code", False) or False,
                    tof_tau_inject=args.get("tof_tau_inject", False) or False,
                    cross_reread=args.get("cross_reread", False) or False,
-                   geo_key_coupling=args.get("geo_key_coupling", False) or False)
+                   geo_key_coupling=args.get("geo_key_coupling", False) or False,
+                   # encoder time-axis tokenisation (H1, 2026-10-18); absent in every earlier
+                   # checkpoint -> reference. Same strict-load reason: stride-(2,1) stages have the
+                   # SAME parameter tensors as the reference, so a trained cell rebuilt without the
+                   # switch would load cleanly and then be SCORED WITH THE WRONG FORWARD.
+                   enc_time_stride1=args.get("enc_time_stride1", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]
