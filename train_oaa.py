@@ -5,13 +5,16 @@ Recipe:
   * AdamW (wd 1e-4), linear warmup + cosine decay, grad-clip 1.0, bf16 autocast
   * EMA 0.999 of the weights (the EMA weights are what is saved and evaluated)
   * optional observation-token masking (--subset-aug / --vdrop-*) for nviews > 4
-  * model selection on val (cos-latitude-weighted MAE); test numbers come from eval.py
+  * model selection on val: pooled cos-latitude-weighted MAE (--select mae, the reference) or the
+    per-image cos-latitude-weighted MSE (--select mse, = the table RMSE's square, 2026-10-18).
+    Both minima are kept (best_mae.pth / best_mse.pth); best.pth is a copy of the selected one, so
+    eval.py and every older scorer keep reading the same file name. Test numbers come from eval.py
 
 Run (Replica 8 obs.):  DATA_MODULE=data_0422 python train_oaa.py --run-name oaa_r8 --nviews 8 \
                          --lr 5e-4 --warmup-ep 4 --epochs 40 --batch-size 3 --accum 11 --subset-aug --vdrop-kmax 4
 See configs/ for the exact per-run settings behind every reported number.
 """
-import os, json, math, time, argparse, copy, random
+import os, json, math, time, argparse, copy, random, shutil
 import torch.distributed as dist
 import numpy as np
 import torch
@@ -23,7 +26,21 @@ from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES, SWIG
 
 @torch.no_grad()
 def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
+    """-> dict. `val_mae_m` is the reference selection scalar, computed by the SAME statements in the
+    SAME order as before (pooled over every weighted pixel of the split) -- it is what every landed
+    train_done.json holds and what `--select mae` keeps minimising, so it must not move a bit.
+
+    The three added numbers are PER-IMAGE, exactly `core.metrics.MetricAccumulator`'s expressions
+    (image-wise cos-latitude-weighted mean, then mean over images), which is how the table is scored:
+      val_mse_m2  mean over images of the weighted MSE  (= what `--select mse` minimises)
+      val_rmse    mean over images of sqrt(weighted MSE) == MetricAccumulator "RMSE"
+      val_absrel  == MetricAccumulator "AbsRel"
+    They are reported in hist[] for every cell from 2026-10-18 on, selected or not, so the two
+    selection rules can be compared for free on every landed run.
+    """
     model.eval(); tot = wn = 0.0
+    s_mse = s_rmse = s_absrel = 0.0; n_img = 0
+    pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
     for b in va:
         sp = b["spec"][:, :nv].to(device)
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -31,7 +48,15 @@ def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
         gt = b["depth"].to(device) * max_depth
         w = wlat * b["mask"].to(device)
         tot += ((D - gt).abs() * w).sum().item(); wn += w.sum().item()
-    return tot / max(wn, 1e-6)
+        B = D.shape[0]
+        mse_i = pi(((D - gt) ** 2) * w, w)                                  # (B,) per-image weighted MSE
+        s_mse += float(mse_i.mean()) * B
+        s_rmse += float(mse_i.clamp(min=0).sqrt().mean()) * B
+        s_absrel += float(pi((D - gt).abs() / gt.clamp(min=0.1) * w, w).mean()) * B
+        n_img += B
+    return {"val_mae_m": tot / max(wn, 1e-6),
+            "val_mse_m2": s_mse / max(n_img, 1), "val_rmse": s_rmse / max(n_img, 1),
+            "val_absrel": s_absrel / max(n_img, 1), "n_img": n_img}
 
 
 def make_parser():
@@ -127,6 +152,12 @@ def make_parser():
     p.add_argument("--aux-l2", type=float, default=0.0)      # additive masked MSE weight; L1 stays the objective
     p.add_argument("--erp-circular", action="store_true")    # decoder convs wrap the ERP azimuth seam (no new params)
     p.add_argument("--yaw-roll-aug", action="store_true")    # per batch: roll the ERP target, shift declared yaws (exact symmetry)
+    # checkpoint selection scalar (2026-10-18, H0-A). `mae` = the reference: pooled val MAE, the
+    # file best.pth is bit-for-bit what the old trainer wrote. `mse` = per-image cos-weighted MSE,
+    # the square of the table's RMSE. Both minima are ALWAYS saved (best_mae.pth, best_mse.pth);
+    # the flag only decides which one best.pth is a copy of. It does not touch the model, the loss,
+    # the data or the schedule, so it is NOT a model arg: core/ckpt.py build() ignores it.
+    p.add_argument("--select", default="mae", choices=["mae", "mse"])
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=16)
@@ -296,11 +327,19 @@ def main():
         if is_main:
             print(f"[resume] {a.resume} ep{start_ep}-> lr={opt.param_groups[0]['lr']:.2e}", flush=True)
 
-    best = 1e9; hist = []
+    best = 1e9; best_mse = 1e9; hist = []
     if a.resume:                                     # resuming in the same run dir: keep the existing best
         _td = os.path.join(os.path.dirname(a.resume), "train_done.json")
         if os.path.exists(_td) and os.path.dirname(a.resume) == rd:
             _j = json.load(open(_td)); best = _j.get("best_val_mae_m", 1e9); hist = _j.get("hist", [])
+            best_mse = _j.get("best_val_mse_m2", 1e9)
+
+    def _save_best(fname):
+        """EMA weights + args -> <rd>/<fname>; the same dict the reference wrote to best.pth."""
+        torch.save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, fname))
+        if fname == f"best_{a.select}.pth":          # best.pth = the selected minimum, same bytes
+            _t = os.path.join(rd, "best.pth.tmp")
+            shutil.copyfile(os.path.join(rd, fname), _t); os.replace(_t, os.path.join(rd, "best.pth"))
     nbatch = len(tr)
     for ep in range(start_ep, a.epochs):
         if ddp:
@@ -370,18 +409,22 @@ def main():
         if is_main:
             if a.dump_attn_stats and not a.no_cross:
                 ema.ray_mic.collect_stats = True        # sampled during val only; cannot touch training
-            vmae = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
-            hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae, "nan_steps_skipped": nskip})
+            _vm = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
+            vmae, vmse = _vm["val_mae_m"], _vm["val_mse_m2"]
+            hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae, "nan_steps_skipped": nskip,
+                         "val_mse_m2": vmse, "val_rmse": _vm["val_rmse"], "val_absrel": _vm["val_absrel"]})
             print(f"[ep {ep:02d}] {time.time()-t0:5.1f}s loss={run:.4f} val_MAE={vmae:.4f}m"
+                  f" val_RMSE={_vm['val_rmse']:.4f}m val_AbsRel={_vm['val_absrel']:.4f}"
                   + (f" nanskip={nskip}" if nskip else ""), flush=True)
             if a.dump_attn_stats and not a.no_cross:
                 ema.ray_mic.collect_stats = False
                 _st = {k: (v.tolist() if torch.is_tensor(v) else v) for k, v in ema.ray_mic.stats.items()}
                 with open(os.path.join(rd, "attn_stats.jsonl"), "a") as _f:
                     _f.write(json.dumps({"epoch": ep, **_st}) + "\n")
-            if vmae < best:
-                best = vmae
-                torch.save({"state_dict": ema.state_dict(), "args": vars(a)}, os.path.join(rd, "best.pth"))
+            if vmae < best:                          # reference rule; best.pth follows it under --select mae
+                best = vmae; _save_best("best_mae.pth")
+            if vmse < best_mse:                      # per-image MSE rule; best.pth follows it under --select mse
+                best_mse = vmse; _save_best("best_mse.pth")
             # Resumable bundle every epoch (2026-10-17), atomically. The old code wrote last.pth
             # ONCE, after the final epoch, so a run that died mid-training left only best.pth --
             # EMA weights with no raw_state and no optimizer state, which --resume cannot load.
@@ -398,9 +441,12 @@ def main():
         torch.save({"state_dict": ema.state_dict(), "raw_state": raw_model.state_dict(),
                     "opt": opt.state_dict(), "sched_last_epoch": sched.last_epoch,
                     "next_epoch": a.epochs, "args": vars(a)}, os.path.join(rd, "last.pth"))
-        json.dump({"best_val_mae_m": best, "hist": hist, "args": vars(a)},
+        json.dump({"best_val_mae_m": best, "hist": hist, "args": vars(a),
+                   "best_val_mse_m2": best_mse, "select": a.select,
+                   "best_pth_is": f"best_{a.select}.pth"},
                   open(os.path.join(rd, "train_done.json"), "w"), indent=2)
-        print(f"[done] best val MAE={best:.4f}m -> {rd}", flush=True)
+        print(f"[done] best val MAE={best:.4f}m  best val MSE={best_mse:.4f}m2  "
+              f"best.pth=best_{a.select}.pth -> {rd}", flush=True)
     if ddp:
         dist.destroy_process_group()
 
