@@ -87,15 +87,21 @@ def main():
     p.add_argument("--nviews", type=int, default=8)
     p.add_argument("--batch", type=int, default=3)
     p.add_argument("--json", default="")
+    p.add_argument("--value-moments-only", action="store_true",
+                   help="benchmark reference vs value-moments, including masked observations")
+    p.add_argument("--stem-stride1", action="store_true")
     a = p.parse_args()
     assert torch.cuda.is_available(), "this file is the GPU half of the test suite"
     dev = torch.device("cuda")
     print(f"device={torch.cuda.get_device_name(dev)} torch={torch.__version__} cuda={torch.version.cuda}")
     print(f"nviews={a.nviews} micro-batch={a.batch} (bf16 autocast, one AdamW step per iteration)\n")
     rows, base = [], None
-    for name, kw in VARIANTS:
-        for obs_mask in ((False, True) if not kw else (False,)):
-            r = bench(name if not obs_mask else "E6 explicit-obs-mask", kw, a.nviews, a.batch, dev, obs_mask)
+    variants = ([("reference", {}), ("value-moments", dict(value_moments=True))]
+                if a.value_moments_only else VARIANTS)
+    for name, kw in variants:
+        for obs_mask in ((False, True) if not kw or a.value_moments_only else (False,)):
+            label = name + " + obs-mask" if obs_mask else name
+            r = bench(label, dict(kw, stem_stride1=a.stem_stride1), a.nviews, a.batch, dev, obs_mask)
             if base is None:
                 base = r
             r["dparams_m"] = round(r["params_m"] - base["params_m"], 6)

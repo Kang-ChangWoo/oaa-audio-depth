@@ -106,7 +106,10 @@ def build(args, DM):
                    # trained cell fails strict load and eval.py drops the row with a bare
                    # `[skip <run>]`, leaving the baselines standing alone in the table.
                    pose_reinject=args.get("pose_reinject", False) or False,
-                   geo_ray_gain=args.get("geo_ray_gain", False) or False)
+                   geo_ray_gain=args.get("geo_ray_gain", False) or False,
+                   # value-dispersion readout (2026-10-17); absent in every earlier checkpoint
+                   # -> reference. Same strict-load reason as the lines above.
+                   value_moments=args.get("value_moments", False) or False)
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

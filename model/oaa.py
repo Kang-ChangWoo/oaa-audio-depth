@@ -23,6 +23,9 @@ strict=True):
   view_fusion  "global" (reference single softmax) | "hier" (exact two-stage decomposition of the
                same softmax, no new parameters) | "hier-geo" (hier + zero-initialised geometry
                routing residual on the outer logits, so it starts exactly at "hier")
+  value_moments  add a zero-initialised, per-channel multiple of the attention-weighted value
+               standard deviation to its mean. +C parameters; global acoustic softmax only.
+               This preserves a second statistic of the echo tokens, not an uncertainty score.
 
 Architecture repairs (`archfix_` campaign, 2026-10-16; construction-time, default off => reference):
   fine_layerscale  LayerScale (CaiT) on the fine decoder skip: `fine_to_dec` keeps nn.Conv2d's own
@@ -144,6 +147,33 @@ def _rms_norm_heads(x, eps=_QK_EPS):
     """
     xf = x.float()
     return xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
+
+
+def _attention_value_std(prob, values, kv_keep=None):
+    """Per-ray weighted value dispersion, with FP32 arithmetic under mixed precision.
+
+    prob: (B,h,R,K), values: (B,h,K,dk). The reference mean/readout is NOT recomputed
+    or changed. This separate statistic normalises the rounded probabilities, centres values
+    on a valid token to reduce cancellation, and needs two additional value matmuls.
+    No (B,h,R,K,dk) tensor is materialised. Subtracting sqrt(eps) makes constant values
+    produce zero, while eps keeps the derivative finite at zero variance.
+    """
+    with torch.autocast(device_type=values.device.type, enabled=False):
+        p, v = _hiprec(prob), _hiprec(values)
+        if kv_keep is None:
+            anchor = v[..., :1, :]
+        else:
+            # Choose the first VALID token, so changing a masked value cannot change the
+            # numerical centring (including when observation zero is the one dropped).
+            first = kv_keep.reshape(v.shape[0], -1).to(torch.int64).argmax(-1)
+            index = first[:, None, None, None].expand(-1, v.shape[1], 1, v.shape[-1])
+            anchor = v.gather(2, index)
+        centred = v - anchor
+        mass = p.sum(-1, keepdim=True).clamp_min(torch.finfo(p.dtype).tiny)
+        mean = (p @ centred) / mass
+        variance = ((p @ centred.square()) / mass - mean.square()).clamp_min(0)
+        eps = 1e-6
+        return (variance + eps).sqrt() - math.sqrt(eps)
 
 # pose (yaw, ear_sign) of each channel for the fixed input modes
 _ALL_POSES = [(0.0, -1.0), (0.0, 1.0), (math.pi / 2, 1.0), (-math.pi / 2, -1.0)]   # [0L, 0R, 90R, 270L]
@@ -403,7 +433,8 @@ class RayMicAttn(nn.Module):
                  view_fusion="global", logit_scale_init=0.0, geo_scale_init=0.0,
                  ray_gate_mode="scalar", ray_gate_init=0.0,
                  registers=0, scene_registers=False, geo_basis="raw",
-                 geo_value_film=False, film_lse=False, geo_ray_gain=False):
+                 geo_value_film=False, film_lse=False, geo_ray_gain=False,
+                 value_moments=False):
         super().__init__()
         assert view_fusion in VIEW_FUSIONS, f"view_fusion {view_fusion} not in {VIEW_FUSIONS}"
         assert ray_gate_mode in RAY_GATE_MODES, f"ray_gate_mode {ray_gate_mode} not in {RAY_GATE_MODES}"
@@ -422,6 +453,16 @@ class RayMicAttn(nn.Module):
                 f"decomposes the softmax over observations and a register belongs to no "
                 f"observation. Refusing the combination instead of guessing a semantics")
         self.h, self.dk = heads, C // heads
+        self.value_moments = bool(value_moments)
+        if self.value_moments:
+            if (view_fusion != "global" or registers or geo_value_film or film_lse
+                    or ray_gate or geo_ray_gain):
+                raise ValueError("--value-moments requires the global acoustic softmax without "
+                                 "registers, GeoFiLM, film-lse, ray-gate or geo-ray-gain; "
+                                 "test one readout change at a time")
+            # No RNG draw: same-seed shared weights AND the following training RNG stream stay
+            # identical. A single zero-initialised scale has a live gradient at identity.
+            self.moment_scale = nn.Parameter(torch.zeros(heads, C // heads))
         self.use_bias = use_bias          # False = "w/o geometric bias" ablation (content-only QK)
         self.nq = nn.LayerNorm(C); self.nk = nn.LayerNorm(C)
         self.q = nn.Linear(C, C); self.k = nn.Linear(C, C); self.v = nn.Linear(C, C); self.o = nn.Linear(C, C)
@@ -461,7 +502,8 @@ class RayMicAttn(nn.Module):
         # reweighting of the POST-softmax attention probabilities, driven by the same geometry
         # features the pre-softmax bias already uses. Distinct from all three existing relatives:
         #   * the geometry bias is pre-softmax, so it can only REDISTRIBUTE mass between tokens;
-        #     the total attention mass is pinned to 1 and the output magnitude is not addressable.
+        #     total attention mass is pinned to 1. The output norm can still change through value
+        #     selection/cancellation; what is absent is an independent mass/gain degree of freedom.
         #   * ray_gate is per-(ray, head), content-driven and geometry-blind, and is applied AFTER
         #     the sum over observations, so it cannot down-weight one observation against another.
         #   * registers are geometry-blind and spend their mass on a learned token.
@@ -485,9 +527,9 @@ class RayMicAttn(nn.Module):
         # ---- C1 content abstention gate (--film-lse). ONE extra column on the film's input: the
         # per-(ray, observation, head) logsumexp of the pre-softmax logits over that observation's
         # M tokens, i.e. the total query-key match mass that the softmax is about to normalise
-        # away. Softmax is scale-invariant in its input, so "how much is there to hear" is exactly
-        # the quantity the reference model throws out; GeoFiLM restores the geometry half of it and
-        # this restores the content half.
+        # away. Softmax is invariant to a common ADDITIVE logit shift, not to logit scaling.
+        # The unnormalised match mass is a content-dependent statistic, but is not by itself a
+        # calibrated measure of audibility or uncertainty.
         #
         # Why this is NOT a retry of --ray-gate, which sat flat at 1.0 in 13 of 14 runs: ray_gate
         # is driven by q_ln, which is built from self.q and dir_mlp(dir6) only -- a per-ray prior
@@ -760,6 +802,15 @@ class RayMicAttn(nn.Module):
                         self.stats["reg_mass_per_head"] = rm.mean((0, 2)).cpu()
         else:
             out_head = self._hier_fuse(logits, V, N, M, feats, kv_keep)
+        if self.value_moments:
+            dispersion = _attention_value_std(p_tok, V, kv_keep)
+            correction = (self.moment_scale[None, :, None, :] * dispersion).to(out_head.dtype)
+            out_head = out_head + correction
+            if self.collect_stats:
+                with torch.no_grad():
+                    self.stats["value_std_mean"] = dispersion.mean().item()
+                    self.stats["moment_scale_absmean"] = self.moment_scale.abs().mean().item()
+                    self.stats["moment_correction_rms"] = correction.float().square().mean().sqrt().item()
         if self.geo_ray_gain:
             # (R,N,gf) -> (R,gf) over observations, concatenated with the raw ray direction, then
             # one Linear to (R,h) and a broadcast against (B,h,R,dk). Applied BEFORE ray_gate; the
@@ -845,9 +896,12 @@ class OAAv2Depth(nn.Module):
                  ray_gate_init=0.0, fine_skip_init=0.0, erp_circular=False,
                  fine_layerscale=0.0, registers=0, scene_registers=False, geo_basis="raw",
                  geo_value_film=False, film_lse=False, ffn_swiglu="off",
-                 pose_reinject=False, geo_ray_gain=False):
+                 pose_reinject=False, geo_ray_gain=False, value_moments=False):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
+        if value_moments and pose_reinject:
+            raise ValueError("--value-moments and --pose-reinject change different parts of the "
+                             "fusion stack; test one structural change at a time")
         self.ffn_swiglu = ffn_swiglu
         # erp_circular: the decoder convs (ConvTranspose2d, both ResBlk 3x3 convs per stage, head)
         # wrap the azimuth axis instead of zero-padding it. ERP columns 0 and 511 are adjacent
@@ -856,6 +910,8 @@ class OAAv2Depth(nn.Module):
         self.erp_circular = erp_circular
         # the attention/fusion variants all live inside RayMicAttn, which --no-cross removes entirely
         if no_cross:
+            if value_moments:
+                raise ValueError("--no-cross removes the --value-moments readout")
             assert not (qk_norm or ray_gate or view_fusion != "global"), (
                 "--no-cross removes RayMicAttn, so --qk-norm / --ray-gate / --view-fusion have no "
                 "effect; refusing the combination instead of silently ignoring it")
@@ -952,7 +1008,8 @@ class OAAv2Depth(nn.Module):
                                   ray_gate_mode=ray_gate_mode, ray_gate_init=ray_gate_init,
                                   registers=registers, scene_registers=scene_registers,
                                   geo_basis=geo_basis, geo_value_film=geo_value_film,
-                                  film_lse=film_lse, geo_ray_gain=geo_ray_gain)
+                                  film_lse=film_lse, geo_ray_gain=geo_ray_gain,
+                                  value_moments=value_moments)
         # ---- pose re-injection (--pose-reinject). The reference adds `pose_emb(pose_feat)` to the
         # coarse tokens ONCE, in `_encode`. After that the pose reaches the fusion stack only
         # through `CondSelfAttn`'s AdaLN, which conditions each observation on ITSELF;

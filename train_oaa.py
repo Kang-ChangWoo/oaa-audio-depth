@@ -21,10 +21,6 @@ from core.metrics import cos_lat, depth_loss
 from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES, SWIGLU_MODES,
                        IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target)
 
-_DM = get_data_module()          # DATA_MODULE=data_mp3d (Matterport3D, default) | data_0422 (Replica)
-loader = _DM.loader
-
-
 @torch.no_grad()
 def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     model.eval(); tot = wn = 0.0
@@ -38,7 +34,7 @@ def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     return tot / max(wn, 1e-6)
 
 
-def main():
+def make_parser():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", required=True)
     p.add_argument("--nviews", type=int, default=4, choices=[2, 4, 6, 8])
@@ -94,6 +90,15 @@ def main():
     # C1 (2026-10-16): one logsumexp column on the GeoFiLM film input, +8 parameters.
     # Requires --geo-value-film; the content half of "how hard to read this observation".
     p.add_argument("--film-lse", action="store_true")
+    p.add_argument("--value-moments", action="store_true",
+                   help="identity-initialised attention value-dispersion readout (+dim parameters)")
+    # Python's `random` is only consulted by --subset-aug and --yaw-roll-aug, and it is NOT
+    # seeded by default. Seeding it is the right thing for a NEW family, but turning it on
+    # unconditionally would change the augmentation stream of every cell that carries one of
+    # those two flags, making already-landed seeds of the same family incomparable to future
+    # ones. So it is a flag, default off: existing families keep their stream bit-for-bit.
+    p.add_argument("--seed-python-rng", action="store_true",
+                   help="also seed Python's random (only affects --subset-aug / --yaw-roll-aug cells)")
     # D1/D2 (2026-10-16): SwiGLU in the 4 erp refinement blocks. "wide" keeps hidden 2C and breaks
     # the 15.45 M ceiling (approved); "matched" shrinks hidden so the parameter count is neutral.
     p.add_argument("--ffn-swiglu", default="off", choices=list(SWIGLU_MODES))
@@ -115,11 +120,22 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-depth", type=float, default=10.0)
     p.add_argument("--out-dir", default="out")
-    a = p.parse_args()
+    return p
+
+
+def main():
+    a = make_parser().parse_args()
+    _DM = get_data_module()      # load AFTER parsing/configuring the input recipe
+    loader = _DM.loader
     # ckpt-args compatibility flags (eval.build reads them): this trainer always uses the full-resolution
     # multi-scale model with AdaLN conditioning and passes rounds/lift to the model.
     a.full_res = a.full_res_enc = a.multi_scale_lift = a.dec_deep = a.rounds_wired = True; a.cond_mode = "adaln"
     a.data_module = os.environ.get("DATA_MODULE", "data_mp3d")   # recorded so eval.py can refuse a dataset mismatch
+    # Keep preprocessing with the weights: copying best.pth alone must not silently fall back
+    # to hop=160. The manifest remains a fallback for older checkpoints.
+    for key, attr in (("stft_hop", "HOP"), ("stft_win", "WIN"),
+                      ("stft_nfft", "N_FFT"), ("stft_window", "WINDOW")):
+        setattr(a, key, int(getattr(_DM, attr)))
     # DDP: auto-enabled under torchrun --nproc_per_node=N. Effective batch = batch-size(per-GPU) x world x accum.
     ddp = "RANK" in os.environ and int(os.environ.get("WORLD_SIZE", "1")) > 1
     rank, world = (int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])) if ddp else (0, 1)
@@ -128,6 +144,8 @@ def main():
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     is_main = rank == 0
     torch.manual_seed(a.seed); np.random.seed(a.seed)
+    if a.seed_python_rng:
+        random.seed(a.seed)
     device = torch.device("cuda", int(os.environ.get("LOCAL_RANK", 0))) if ddp else torch.device("cuda")
     rd = os.path.join(a.out_dir, a.run_name)
     if is_main:
@@ -171,7 +189,8 @@ def main():
                        scene_registers=a.scene_registers, geo_basis=a.geo_basis,
                        geo_value_film=a.geo_value_film, film_lse=a.film_lse,
                        ffn_swiglu=a.ffn_swiglu,
-                       pose_reinject=a.pose_reinject, geo_ray_gain=a.geo_ray_gain).to(device)
+                       pose_reinject=a.pose_reinject, geo_ray_gain=a.geo_ray_gain,
+                       value_moments=a.value_moments).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every
@@ -212,6 +231,7 @@ def main():
         json.dump({"args": vars(a), "params_m": sum(x.numel() for x in model.parameters()) / 1e6,
                    "git_sha": _sh("git rev-parse HEAD") or _sha_nogit(), "git_dirty": _sh("git status --short"),
                    "git_diff": _sh("git diff"), "data_module": a.data_module, "dmode": dmode,
+                   "ddp_world": world,
                    "stft": _stft,
                    "view_poses": vp, "split_sizes": {"train": len(tr.dataset), "val": len(va.dataset)},
                    "torch": torch.__version__, "cuda": torch.version.cuda,
