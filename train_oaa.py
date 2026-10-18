@@ -24,6 +24,13 @@ from core.metrics import cos_lat, depth_loss
 from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES, SWIGLU_MODES,
                        IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target)
 
+
+def _seed_worker(worker_id):
+    """DataLoader worker_init_fn used only under --deterministic: PyTorch seeds each worker's torch
+    and `random` from base_seed+worker_id, but NOT numpy -- seed both from torch.initial_seed()."""
+    s = torch.initial_seed() % 2 ** 32
+    np.random.seed(s); random.seed(s)
+
 @torch.no_grad()
 def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     """-> dict. `val_mae_m` is the reference selection scalar, computed by the SAME statements in the
@@ -124,6 +131,19 @@ def make_parser():
     # ones. So it is a flag, default off: existing families keep their stream bit-for-bit.
     p.add_argument("--seed-python-rng", action="store_true",
                    help="also seed Python's random (only affects --subset-aug / --yaw-roll-aug cells)")
+    # run-to-run determinism switch (detcheck, 2026-10-18). Same node, same seed, same commit gave
+    # best val MAE 9.26 % apart (nodediff _a/_b), so this isolates "kernel nondeterminism" as the
+    # cause: cudnn.deterministic, benchmark off, use_deterministic_algorithms(warn_only),
+    # CUBLAS_WORKSPACE_CONFIG, seeded DataLoader workers + sampler generator. Default off => the
+    # reference path is untouched, statement for statement (no flag is read anywhere else).
+    p.add_argument("--deterministic", action="store_true",
+                   help="cudnn.deterministic + benchmark off + use_deterministic_algorithms(warn_only) "
+                        "+ CUBLAS_WORKSPACE_CONFIG=:4096:8 + seeded DataLoader workers/generator")
+    # warn_only=True leaves the SDPA flash-attention backward nondeterministic (torch 2.8 warns so,
+    # attention_backward.cu:110). strict = warn_only=False: flash attention takes its deterministic
+    # backward and any op with no deterministic implementation raises instead of warning.
+    p.add_argument("--deterministic-strict", action="store_true",
+                   help="--deterministic with warn_only=False (implies --deterministic)")
     # D1/D2 (2026-10-16): SwiGLU in the 4 erp refinement blocks. "wide" keeps hidden 2C and breaks
     # the 15.45 M ceiling (approved); "matched" shrinks hidden so the parameter count is neutral.
     p.add_argument("--ffn-swiglu", default="off", choices=list(SWIGLU_MODES))
@@ -176,6 +196,15 @@ def make_parser():
 
 def main():
     a = make_parser().parse_args()
+    if a.deterministic_strict:
+        a.deterministic = True
+    if a.deterministic:
+        # must be in the environment before the first cuBLAS handle is created; setdefault keeps an
+        # explicit export (e.g. :16:8) in force instead of overriding it.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=not a.deterministic_strict)
     _DM = get_data_module()      # load AFTER parsing/configuring the input recipe
     loader = _DM.loader
     # ckpt-args compatibility flags (eval.build reads them): this trainer always uses the full-resolution
@@ -211,7 +240,11 @@ def main():
         tr = DataLoader(tr_set, batch_size=a.batch_size, sampler=tr_sampler,
                         num_workers=a.num_workers, drop_last=True, pin_memory=True)
     else:
-        tr = _ld("train", a.batch_size, True, a.num_workers, dmode)
+        _ld_kw = {}
+        if a.deterministic:      # seeded sampler permutation + seeded workers; OFF passes nothing extra
+            _g = torch.Generator(); _g.manual_seed(a.seed)
+            _ld_kw = dict(worker_init_fn=_seed_worker, generator=_g)
+        tr = _ld("train", a.batch_size, True, a.num_workers, dmode, **_ld_kw)
     # val batch follows the train micro-batch (capped at 32): with full_res_enc at 6/8ch a bs-32
     # val forward spikes 6-8 GB above the training footprint and OOMs the epoch-0 validation.
     va = _ld("val", min(32, max(a.batch_size, 4)), False, a.num_workers, dmode)
@@ -248,6 +281,12 @@ def main():
                        enc_time_stride1=a.enc_time_stride1).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
+        # readback of the determinism state actually in force (both modes print it, so an OFF run
+        # documents the torch defaults it ran under)
+        print(f"[det] flag={a.deterministic} strict={a.deterministic_strict} cudnn.deterministic={torch.backends.cudnn.deterministic} "
+              f"cudnn.benchmark={torch.backends.cudnn.benchmark} "
+              f"use_deterministic_algorithms={torch.are_deterministic_algorithms_enabled()} "
+              f"CUBLAS_WORKSPACE_CONFIG={os.environ.get('CUBLAS_WORKSPACE_CONFIG')}", flush=True)
         # run git in the REPO, not in the launcher's cwd: `git_dirty` / `git_diff` were null in every
         # manifest written so far, because a launcher that cd'd anywhere else got "not a repository"
         # on stderr and an empty stdout, which `or None` then recorded as "clean". git_sha survived

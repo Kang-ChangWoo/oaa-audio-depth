@@ -189,8 +189,11 @@ class SpecWaveSet(_Base):
 
 
 def loader(split, batch_size, shuffle, num_workers, mode="r2", *_a, **_k):
+    # only the two determinism kwargs are forwarded (train_oaa.py --deterministic); anything else
+    # is still swallowed, so every existing caller builds the exact same DataLoader as before
     return DataLoader(RotSet(split, mode), batch_size=batch_size, shuffle=shuffle,
-                      num_workers=num_workers, drop_last=shuffle, pin_memory=True)
+                      num_workers=num_workers, drop_last=shuffle, pin_memory=True,
+                      **{k: v for k, v in _k.items() if k in ("worker_init_fn", "generator")})
 
 
 def wave_loader(split, batch_size, shuffle, num_workers, mode="r2"):
