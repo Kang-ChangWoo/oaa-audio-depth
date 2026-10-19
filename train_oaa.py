@@ -183,6 +183,14 @@ def make_parser():
     # the square of the table's RMSE. Both minima are ALWAYS saved (best_mae.pth, best_mse.pth);
     # the flag only decides which one best.pth is a copy of. It does not touch the model, the loss,
     # the data or the schedule, so it is NOT a model arg: core/ckpt.py build() ignores it.
+    # input-resolution lane (2026-10-19, hop-160 re-measurement). The data module reads
+    # STFT_NFFT / STFT_WIN / STFT_HOP from the environment when it is imported, and the queue
+    # launcher exports the hop-16 triple on every command, so a per-cell triple needs a flag that
+    # writes those three variables BEFORE get_data_module() imports the module. Default None =>
+    # os.environ is not touched and the no-flag path is statement-identical. What gets stamped into
+    # args.stft_* and manifest["stft"] below is still read off the LOADED module, not this string.
+    p.add_argument("--stft-override", default=None, metavar="NFFT/WIN/HOP",
+                   help="e.g. 512/400/160 (released recipe) or 512/64/16; overrides the STFT_* env")
     p.add_argument("--select", default="mae", choices=["mae", "mse"])
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=40)
@@ -205,6 +213,9 @@ def main():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True, warn_only=not a.deterministic_strict)
+    if a.stft_override:
+        _nfft, _win, _hop = (int(x) for x in a.stft_override.split("/"))
+        os.environ["STFT_NFFT"], os.environ["STFT_WIN"], os.environ["STFT_HOP"] = str(_nfft), str(_win), str(_hop)
     _DM = get_data_module()      # load AFTER parsing/configuring the input recipe
     loader = _DM.loader
     # ckpt-args compatibility flags (eval.build reads them): this trainer always uses the full-resolution
