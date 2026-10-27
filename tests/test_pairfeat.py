@@ -1,0 +1,145 @@
+"""--pair-feat (core/pairfeat.py) contract tests. CPU only.
+  pytest -q tests/test_pairfeat.py
+"""
+import os, sys, math, tempfile, contextlib
+import torch
+try:
+    import pytest
+except ImportError:                                         # shared_audio env has no pytest: run as a script
+    class pytest:                                           # noqa: N801
+        @staticmethod
+        @contextlib.contextmanager
+        def raises(exc):
+            try:
+                yield
+            except exc:
+                return
+            raise AssertionError(f"expected {exc.__name__}")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import pairfeat                                   # noqa: E402
+from model.oaa import OAAv2Depth                            # noqa: E402
+
+R2 = [(0, 0), (0, 1)]
+R8 = [(o, e) for o in (0, 1, 2, 3) for e in (0, 1)]
+AL = [(0, 0), (1, 0), (2, 0), (3, 0)]                       # single-ear mode: no partners
+CB = [(0, 0), (0, 1), (1, 1), (3, 0)]                       # mixed: one pair + two singles
+
+
+def _spec(N, B=2, H=8, W=16, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    return torch.rand(B, N, H, W, generator=g) + 1e-3
+
+
+def test_none_is_the_same_object():
+    x = _spec(2)
+    assert pairfeat.build(x, R2, "none") is x
+    assert pairfeat.in_ch("none") == 1 and pairfeat.in_ch("earmean") == 1
+    assert pairfeat.in_ch("ild") == 2 and pairfeat.in_ch("partner") == 2
+
+
+def test_partner_index():
+    assert pairfeat.partner_index(R2) == [1, 0]
+    assert pairfeat.partner_index(R8) == [1, 0, 3, 2, 5, 4, 7, 6]
+    assert pairfeat.partner_index(AL) == [-1, -1, -1, -1]
+    assert pairfeat.partner_index(CB) == [1, 0, -1, -1]
+
+
+def test_ild_antisymmetric_bounded_and_monotone_in_ild_db():
+    x = _spec(8)
+    y = pairfeat.build(x, R8, "ild")
+    assert y.shape == (2, 16, 8, 16)
+    mag, c = y[:, 0::2], y[:, 1::2]
+    assert torch.equal(mag, x)                                           # plane 1 = magnitude, untouched
+    for i, j in enumerate(pairfeat.partner_index(R8)):
+        assert torch.allclose(c[:, i], -c[:, j])                         # c_L = -c_R
+    assert float(c.abs().max()) <= 1.0
+    # c == tanh(ILD_dB * ln10 / 40) up to EPS
+    ild_db = 20 * torch.log10(x[:, 0] / x[:, 1])
+    assert torch.allclose(c[:, 0], torch.tanh(ild_db * math.log(10) / 40), atol=1e-4)
+
+
+def test_partner_plane_is_the_other_ear_and_singles_are_zero():
+    x = _spec(4)
+    y = pairfeat.build(x, CB, "partner")
+    assert torch.equal(y[:, 1], x[:, 1]) and torch.equal(y[:, 3], x[:, 0])
+    assert torch.equal(y[:, 5], torch.zeros_like(x[:, 0])) and torch.equal(y[:, 7], torch.zeros_like(x[:, 0]))
+    z = pairfeat.build(x, CB, "ild")
+    assert torch.equal(z[:, 5], torch.zeros_like(x[:, 0])) and torch.equal(z[:, 7], torch.zeros_like(x[:, 0]))
+
+
+def test_earmean_matches_the_diagnostic_perturbation():
+    x = _spec(8)
+    y = pairfeat.build(x, R8, "earmean")
+    assert y.shape == x.shape
+    for i, j in enumerate(pairfeat.partner_index(R8)):
+        assert torch.allclose(y[:, i], 0.5 * (x[:, i] + x[:, j]))
+        assert torch.allclose(y[:, i], y[:, j])
+    w = pairfeat.build(x[:, :4], AL, "earmean")
+    assert torch.equal(w, x[:, :4])                                      # no partner -> unchanged
+
+
+def test_dropped_observation_leaves_no_leak():
+    x = _spec(8)
+    y = pairfeat.build(x, R8, "ild", dropped=[2])                        # drop (slot 1, L); partner = 3
+    assert torch.equal(y[:, 4], torch.zeros_like(x[:, 0])) and torch.equal(y[:, 5], torch.zeros_like(x[:, 0]))
+    assert torch.equal(y[:, 7], torch.zeros_like(x[:, 0]))               # partner's pair plane zeroed
+    assert torch.equal(y[:, 6], x[:, 3])                                 # partner's magnitude kept
+    ref = pairfeat.build(x, R8, "ild")
+    keep = [k for k in range(16) if k not in (4, 5, 7)]
+    assert torch.equal(y[:, keep], ref[:, keep])                         # nothing else touched
+    e = pairfeat.build(x, R8, "earmean", dropped=[0])
+    assert torch.equal(e[:, 0], torch.zeros_like(x[:, 0]))
+    assert torch.allclose(e[:, 1], 0.5 * (x[:, 0] + x[:, 1]))
+
+
+def test_model_in_ch_2_forward_and_param_delta():
+    SMALL = dict(C=64, lh=4, lw=8, enc_res=(16, 32))                     # same tiny config as tests/test_oaa_modules.py
+    torch.manual_seed(0)
+    m1 = OAAv2Depth(nviews=2, in_ch=1, **SMALL)
+    torch.manual_seed(0)
+    m2 = OAAv2Depth(nviews=2, in_ch=2, **SMALL)
+    n1 = sum(p.numel() for p in m1.parameters()); n2 = sum(p.numel() for p in m2.parameters())
+    assert n2 - n1 == (64 // 2) * 1 * 3 * 3                              # stem conv gains one input plane (+288 at ngf 64)
+    x = _spec(2, B=1, H=16, W=32)
+    y = pairfeat.build(x, R2, "ild")
+    m2.eval()
+    with torch.no_grad():
+        out = m2(y, view_poses=[(0.0, -1.0), (0.0, 1.0)])
+    assert out.dim() == 4 and out.shape[:2] == (1, 1)
+    assert torch.isfinite(out).all()
+    with pytest.raises(AssertionError):
+        m2(x, view_poses=[(0.0, -1.0), (0.0, 1.0)])                      # 2 planes expected, 1 given -> loud
+
+
+def test_ckpt_roundtrip_strict_load_via_core_ckpt_build():
+    import data_0422 as DM
+    from core.ckpt import build
+    torch.manual_seed(0)
+    m = OAAv2Depth(C=256, nviews=2, in_ch=2)
+    args = {"nviews": 2, "data_mode": "r2", "dim": 256, "rounds": 2, "lift_h": 16, "lift_w": 32,
+            "rounds_wired": True, "pair_feat": "ild", "stft_hop": DM.HOP, "stft_win": DM.WIN,
+            "stft_nfft": DM.N_FFT, "stft_window": DM.WINDOW, "data_module": "data_0422"}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "best.pth")
+        torch.save({"state_dict": m.state_dict(), "args": args}, p)
+        ck = torch.load(p, map_location="cpu", weights_only=False)
+        m2, dmode, nch, kind, poses = build(ck["args"], DM)
+        m2.load_state_dict(ck["state_dict"], strict=True)
+        assert (dmode, nch, kind) == ("r2", 2, "spec") and len(poses) == 2
+        # a "none" checkpoint still rebuilds with in_ch=1
+        args2 = dict(args, pair_feat="none")
+        m3, *_ = build(args2, DM)
+        assert m3.enc.stem[0].in_channels == 1 and m2.enc.stem[0].in_channels == 2
+
+
+if __name__ == "__main__":                                  # plain-python runner (no pytest in shared_audio)
+    fails = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn(); print(f"PASS {name}")
+            except Exception as e:                          # noqa: BLE001
+                fails += 1; print(f"FAIL {name}: {e!r}")
+    print("ALL-PASS" if not fails else f"FAILED={fails}")
+    sys.exit(1 if fails else 0)

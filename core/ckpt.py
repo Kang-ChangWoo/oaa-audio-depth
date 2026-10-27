@@ -11,6 +11,7 @@ import os
 import torch
 
 from model.oaa import OAAv2Depth
+from core import pairfeat
 from model.batvision import RotDepth
 from model import PretrainedResNet, PretrainedViT, BeyondI2DDepth, EchoScanDepth
 
@@ -123,7 +124,12 @@ def build(args, DM):
                    # checkpoint -> reference. Same strict-load reason: stride-(2,1) stages have the
                    # SAME parameter tensors as the reference, so a trained cell rebuilt without the
                    # switch would load cleanly and then be SCORED WITH THE WRONG FORWARD.
-                   enc_time_stride1=args.get("enc_time_stride1", False) or False)
+                   enc_time_stride1=args.get("enc_time_stride1", False) or False,
+                   # pair input planes (--pair-feat, 2026-10-27); absent in every earlier
+                   # checkpoint -> "none" -> in_ch=1, the reference. Without this line an ild /
+                   # partner cell (stem conv with 2 input planes) fails strict load and eval.py
+                   # drops the row with a bare `[skip <run>]`. core/evaluate.py builds the planes.
+                   in_ch=pairfeat.in_ch(args.get("pair_feat") or "none"))
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

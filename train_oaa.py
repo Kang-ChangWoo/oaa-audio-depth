@@ -21,6 +21,7 @@ import torch
 
 from core.data import get_data_module
 from core.metrics import cos_lat, depth_loss
+from core import pairfeat
 from model.oaa import (OAAv2Depth, VIEW_FUSIONS, RAY_GATE_MODES, GEO_BASES, SWIGLU_MODES,
                        IDENTITY_INIT_PARAM_SUFFIXES, yaw_roll_target)
 
@@ -32,7 +33,7 @@ def _seed_worker(worker_id):
     np.random.seed(s); random.seed(s)
 
 @torch.no_grad()
-def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
+def quick_val(model, va, device, max_depth, wlat, nv, vp=None, pf=None):
     """-> dict. `val_mae_m` is the reference selection scalar, computed by the SAME statements in the
     SAME order as before (pooled over every weighted pixel of the split) -- it is what every landed
     train_done.json holds and what `--select mae` keeps minimising, so it must not move a bit.
@@ -50,6 +51,8 @@ def quick_val(model, va, device, max_depth, wlat, nv, vp=None):
     pi = lambda num, den: (num.flatten(1).sum(1) / den.flatten(1).sum(1).clamp(min=1e-6))
     for b in va:
         sp = b["spec"][:, :nv].to(device)
+        if pf is not None and pf[0] != "none":      # --pair-feat planes (pf=None / "none": untouched)
+            sp = pairfeat.build(sp, pf[1], pf[0])
         with torch.autocast("cuda", dtype=torch.bfloat16):
             D = model(sp, view_poses=vp).float() * max_depth
         gt = b["depth"].to(device) * max_depth
@@ -191,6 +194,11 @@ def make_parser():
     # args.stft_* and manifest["stft"] below is still read off the LOADED module, not this string.
     p.add_argument("--stft-override", default=None, metavar="NFFT/WIN/HOP",
                    help="e.g. 512/400/160 (released recipe) or 512/64/16; overrides the STFT_* env")
+    # pair (two-ear) input planes (2026-10-27, core/pairfeat.py). Default "none" => the spec tensor
+    # is handed to the model untouched (the same object), so the reference path is bit-identical.
+    # ild / partner build the model with in_ch=2 (stem conv 1->2 planes, +288 parameters);
+    # earmean keeps in_ch=1 and replaces both ears of a pair by their mean (input ablation).
+    p.add_argument("--pair-feat", default="none", choices=list(pairfeat.KINDS))
     p.add_argument("--select", default="mae", choices=["mae", "mse"])
     p.add_argument("--warmup-ep", type=float, default=4.0)
     p.add_argument("--epochs", type=int, default=40)
@@ -243,6 +251,9 @@ def main():
         os.makedirs(rd, exist_ok=True)
 
     dmode = a.data_mode or {2: "r2", 4: "cB", 6: "r6", 8: "r8"}[a.nviews]
+    # (slot, ear) list of the loader's channels, only consulted when --pair-feat is on
+    pf_chans = list(_DM._CH[dmode][:a.nviews]) if a.pair_feat != "none" else None
+    pf = (a.pair_feat, pf_chans)
     _ld = loader
     if ddp:
         from torch.utils.data import DataLoader, distributed as tdist
@@ -289,7 +300,8 @@ def main():
                        tof_value_code=a.tof_value_code, tof_tau_inject=a.tof_tau_inject,
                        cross_reread=a.cross_reread,
                        geo_key_coupling=a.geo_key_coupling,
-                       enc_time_stride1=a.enc_time_stride1).to(device)
+                       enc_time_stride1=a.enc_time_stride1,
+                       in_ch=pairfeat.in_ch(a.pair_feat)).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # readback of the determinism state actually in force (both modes print it, so an OFF run
@@ -406,7 +418,7 @@ def main():
         for i, b in enumerate(tr):
             spec = b["spec"][:, :a.nviews].to(device, non_blocking=True)
             gt = b["depth"].to(device); mask = b["mask"].to(device)
-            vp_in, spec_in, ov_in = vp, spec, None
+            vp_in, spec_in, ov_in, _dropped = vp, spec, None, None
             _vp = a.vdrop_p * min(1.0, max(0.0, (ep - a.vdrop_start + 1) / max(1, a.vdrop_ramp)))
             if a.subset_aug and random.random() < _vp:          # observation-token masking (curriculum ramp)
                 # never zero every observation: k < nviews
@@ -415,12 +427,17 @@ def main():
                 k = random.choice(_pool)
                 idx = random.sample(range(spec_in.shape[1]), k)
                 spec_in = spec_in.clone(); spec_in[:, idx] = 0
+                _dropped = idx
                 if a.explicit_obs_mask:
                     # (B,N) even though this dropout is per-batch, so the model API is already
                     # per-sample for a future per-sample curriculum. view_poses stay untouched:
                     # removing entries would break the fixed view indexing and the ckpt contract.
                     ov_in = torch.ones(spec_in.shape[0], a.nviews, dtype=torch.bool, device=device)
                     ov_in[:, idx] = False
+            if a.pair_feat != "none":
+                # planes built from the CLEAN spec; a dropped observation (and its partner's pair
+                # plane) is zeroed inside build(), so --subset-aug keeps its meaning
+                spec_in = pairfeat.build(spec, pf_chans, a.pair_feat, dropped=_dropped)
             if a.yaw_roll_aug:
                 # same recording, receiver declared k columns further round, target rolled to match.
                 # k is a whole number of fine-grid columns (2*lw of them across 512), so the fine-lift
@@ -466,7 +483,7 @@ def main():
         if is_main:
             if a.dump_attn_stats and not a.no_cross:
                 ema.ray_mic.collect_stats = True        # sampled during val only; cannot touch training
-            _vm = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp)
+            _vm = quick_val(ema, va, device, a.max_depth, wlat, a.nviews, vp, pf)
             vmae, vmse = _vm["val_mae_m"], _vm["val_mse_m2"]
             hist.append({"epoch": ep, "loss": run, "val_mae_m": vmae, "nan_steps_skipped": nskip,
                          "val_mse_m2": vmse, "val_rmse": _vm["val_rmse"], "val_absrel": _vm["val_absrel"]})
