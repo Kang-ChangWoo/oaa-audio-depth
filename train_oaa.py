@@ -52,7 +52,7 @@ def quick_val(model, va, device, max_depth, wlat, nv, vp=None, pf=None):
     for b in va:
         sp = b["spec"][:, :nv].to(device)
         if pf is not None and pf[0] != "none":      # --pair-feat planes (pf=None / "none": untouched)
-            sp = pairfeat.build(sp, pf[1], pf[0])
+            sp = pairfeat.build(sp, pf[1], pf[0], ipd=(b["ipd"][:, :nv].to(device) if "ipd" in b else None))
         with torch.autocast("cuda", dtype=torch.bfloat16):
             D = model(sp, view_poses=vp).float() * max_depth
         gt = b["depth"].to(device) * max_depth
@@ -226,6 +226,11 @@ def main():
         _nfft, _win, _hop = (int(x) for x in a.stft_override.split("/"))
         os.environ["STFT_NFFT"], os.environ["STFT_WIN"], os.environ["STFT_HOP"] = str(_nfft), str(_win), str(_hop)
     _DM = get_data_module()      # load AFTER parsing/configuring the input recipe
+    if a.pair_feat == "ipd":
+        # phase planes come from the loader (data module EMIT_IPD); data_gibson only (2026-11-01)
+        assert hasattr(_DM, "EMIT_IPD"), f"--pair-feat ipd: {_DM.__name__} has no EMIT_IPD (ipd loader)"
+        _DM.EMIT_IPD = True
+        a.ipd_scale = float(_DM.IPD_SCALE)        # stamped into the manifest args; absent for every other run
     loader = _DM.loader
     # ckpt-args compatibility flags (eval.build reads them): this trainer always uses the full-resolution
     # multi-scale model with AdaLN conditioning and passes rounds/lift to the model.
@@ -464,7 +469,9 @@ def main():
             if a.pair_feat != "none":
                 # planes built from the CLEAN spec; a dropped observation (and its partner's pair
                 # plane) is zeroed inside build(), so --subset-aug keeps its meaning
-                spec_in = pairfeat.build(spec, pf_chans, a.pair_feat, dropped=_dropped)
+                spec_in = pairfeat.build(spec, pf_chans, a.pair_feat, dropped=_dropped,
+                                         ipd=(b["ipd"][:, :a.nviews].to(device, non_blocking=True)
+                                              if "ipd" in b else None))
             if a.yaw_roll_aug:
                 # same recording, receiver declared k columns further round, target rolled to match.
                 # k is a whole number of fine-grid columns (2*lw of them across 512), so the fine-lift
