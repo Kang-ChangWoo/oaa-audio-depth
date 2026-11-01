@@ -90,6 +90,7 @@ def make_parser():
     p.add_argument("--vdrop-start", type=int, default=0)   # curriculum: masking off before this epoch
     p.add_argument("--vdrop-ramp", type=int, default=1)    # epochs to ramp p up to vdrop-p after start
     p.add_argument("--resume", default="")                 # last.pth: restore raw/EMA/opt and continue to --epochs
+    p.add_argument("--init", default="")                   # best.pth: load EMA weights only, fresh optimizer/schedule (fine-tune)
     # input-cue ablations (Table: input cues)
     p.add_argument("--pose-blind", action="store_true")   # same pose (0,+1) for every observation
     p.add_argument("--ear-blind", action="store_true")     # keep yaw, drop ear sign (all +1)
@@ -283,7 +284,16 @@ def main():
     if a.explicit_obs_mask and not a.subset_aug:
         print("[warn] --explicit-obs-mask without --subset-aug: every observation is always valid, "
               "so the mask is all-ones and training is identical to the reference recipe", flush=True)
-    model = OAAv2Depth(C=a.dim, nviews=a.nviews, rounds=a.rounds, lh=a.lift_h, lw=a.lift_w,
+    # --pair-feat stereo/stereoild (2026-10-31): build() folds each (L,R) pair into ONE observation,
+    # so the model must be built with HALF the observations and half the pose list. 2-channel only:
+    # both ears share a heading, so the surviving pose is the pair's pose and nothing is invented.
+    _mviews = a.nviews
+    if pairfeat.folds_views(a.pair_feat):
+        assert a.nviews % 2 == 0, "stereo needs an even nviews"
+        _mviews = a.nviews // 2
+        if vp is not None:
+            vp = list(vp)[::2][:_mviews]
+    model = OAAv2Depth(C=a.dim, nviews=_mviews, rounds=a.rounds, lh=a.lift_h, lw=a.lift_w,
                        stem_stride1=a.stem_stride1, max_depth=a.max_depth,
                        no_pose_emb=a.no_pose_emb, no_ray_emb=a.no_ray_emb, no_geo_bias=a.no_geo_bias,
                        no_tf_pe=a.no_tf_pe, no_cross=a.no_cross,
@@ -384,6 +394,12 @@ def main():
     for q in ema.parameters():
         q.requires_grad_(False)
 
+    if a.init:                                       # fine-tune: load weights only (EMA state_dict), fresh opt/schedule
+        ck = torch.load(a.init, map_location="cpu", weights_only=False)
+        raw_model.load_state_dict(ck["state_dict"]); ema.load_state_dict(ck["state_dict"])
+        if is_main:
+            print(f"[init] weights from {a.init} (fresh optimizer/schedule)", flush=True)
+
     start_ep = 0
     if a.resume:                                     # continue training: restore model/EMA/opt, fast-forward the schedule
         ck = torch.load(a.resume, map_location="cpu", weights_only=False)
@@ -421,11 +437,22 @@ def main():
             vp_in, spec_in, ov_in, _dropped = vp, spec, None, None
             _vp = a.vdrop_p * min(1.0, max(0.0, (ep - a.vdrop_start + 1) / max(1, a.vdrop_ramp)))
             if a.subset_aug and random.random() < _vp:          # observation-token masking (curriculum ramp)
-                # never zero every observation: k < nviews
+                # never zero every observation: k < nviews. For folding pair features
+                # (stereo/stereoild) one observation is an (L,R) pair, so count and drop in
+                # pair units -- otherwise k=6 of 8 ear channels can cover all 4 folded
+                # observations and zero the whole input. The non-folding path is unchanged
+                # (same RNG calls in the same order), so ctrl/ild stay bit-identical.
+                _fold = pairfeat.folds_views(a.pair_feat)
+                _nobs = spec_in.shape[1] // 2 if _fold else spec_in.shape[1]
                 _pool = [x for x in range(min(a.vdrop_kstep, 2), a.vdrop_kmax + 1, a.vdrop_kstep)
-                         if x < spec_in.shape[1]] or [1]
+                         if x < _nobs] or [1]
                 k = random.choice(_pool)
-                idx = random.sample(range(spec_in.shape[1]), k)
+                if _fold:
+                    assert all(pf_chans[2 * j][0] == pf_chans[2 * j + 1][0] for j in range(_nobs)), \
+                        "folding --subset-aug needs consecutive (L,R) channel pairs"
+                    idx = [c for j in random.sample(range(_nobs), k) for c in (2 * j, 2 * j + 1)]
+                else:
+                    idx = random.sample(range(spec_in.shape[1]), k)
                 spec_in = spec_in.clone(); spec_in[:, idx] = 0
                 _dropped = idx
                 if a.explicit_obs_mask:
@@ -447,14 +474,18 @@ def main():
                 k = _step * random.randrange(2 * raw_model.lw)
                 gt, mask, vp_in = yaw_roll_target(gt, mask, vp_in if vp_in is not None else raw_model.view_pose,
                                                   k, gt.shape[-1])
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(os.environ.get("TRAIN_FP32", "") == "")):
                 D = model(spec_in, view_poses=vp_in, obs_valid=ov_in)
-            loss = depth_loss(D, gt, mask, a.depth_loss, wlat, a.aux_l2)
-            if loss is None:                                           # no weighted-valid pixel anywhere
-                # drop this micro-batch's gradient but keep the step cadence, so --accum still
-                # defines the effective batch and the LR schedule stays on its pre-registered horizon
-                print(f"[skip] ep{ep} batch{i}: empty depth mask, micro-batch dropped", flush=True)
-            else:
+            loss = None
+            if not torch.isfinite(D).all():                           # 3DIO-aug surfaces OAA's rare non-finite forward:
+                print(f"[fwdskip] ep{ep} batch{i}: non-finite forward, micro-batch dropped", flush=True)
+            else:                                                      # drop it BEFORE backward so no nan grad ever accumulates
+                loss = depth_loss(D, gt, mask, a.depth_loss, wlat, a.aux_l2)
+                if loss is None:                                       # no weighted-valid pixel anywhere
+                    print(f"[skip] ep{ep} batch{i}: empty depth mask, micro-batch dropped", flush=True)
+            if loss is not None:
+                # keep the step cadence either way, so --accum defines the effective batch and the
+                # LR schedule stays on its pre-registered horizon
                 (loss / accum).backward()                              # accumulate grads over `accum` micro-batches
                 run += float(loss.detach()); nb += 1
             if (i + 1) % accum == 0 or (i + 1) == nbatch:              # optimizer step per effective batch
@@ -467,7 +498,7 @@ def main():
                 # Drop the step, keep the cadence: sched.step() still fires, so the LR horizon
                 # stays exactly where it was pre-registered. This branch is unreachable while the
                 # gradients are finite, so a healthy run is bit-for-bit the reference recipe.
-                if not bool(torch.isfinite(gnorm)):
+                if not bool(torch.isfinite(gnorm)):   # fwdskip already removes nan micro-batches; clip_grad_norm caps magnitude, so this rarely fires
                     nskip += 1
                     print(f"[nanskip] ep{ep} batch{i}: grad norm {float(gnorm)}, step dropped",
                           flush=True)

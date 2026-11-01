@@ -27,14 +27,23 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 """
 import torch
 
-KINDS = ("none", "ild", "partner", "earmean")
+KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild")
 EPS = 1e-6
 
 
 def in_ch(kind):
     """Input planes per observation the model must be built with."""
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
-    return 2 if kind in ("ild", "partner") else 1
+    if kind in ("ild", "partner", "stereo"):
+        return 2
+    if kind == "stereoild":
+        return 3
+    return 1
+
+
+def folds_views(kind):
+    """True when build() collapses each (L,R) pair into ONE observation (nviews halves)."""
+    return kind in ("stereo", "stereoild")
 
 
 def partner_index(chans):
@@ -62,6 +71,34 @@ def build(spec, chans, kind, dropped=None):
         if dropped:
             out = out.clone()
             out[:, list(dropped)] = 0
+        return out
+    if kind in ("stereo", "stereoild"):
+        # Fold each (slot, L/R) pair into a single observation whose planes are [L, R(, ILD)].
+        # 2026-10-31 (Changwoo): the 2-channel rig has both ears at the SAME heading, so one pose
+        # describes the folded observation and no pose has to be invented. Mirrored duplication of
+        # the existing per-ear layout ([L,R] and [R,L]) disappears, and the view-fusion stage sees
+        # one token instead of two. Pairs are taken in ascending slot order, ear 0 (L) first.
+        slots = {}
+        for i, (s, e) in enumerate(chans):
+            slots.setdefault(int(s), {})[int(e)] = i
+        order = sorted(slots)
+        assert all(len(slots[s]) == 2 for s in order), \
+            f"stereo needs both ears per slot; got {[(s, sorted(slots[s])) for s in order]}"
+        li = torch.tensor([slots[s][0] for s in order], device=spec.device)
+        ri = torch.tensor([slots[s][1] for s in order], device=spec.device)
+        L = spec.index_select(1, li)
+        Rr = spec.index_select(1, ri)
+        planes = [L, Rr]
+        if kind == "stereoild":
+            planes.append((L - Rr) / (L + Rr + EPS))
+        k = len(planes)
+        out = torch.stack(planes, 2).reshape(B, k * len(order), H, W)
+        if dropped:
+            out = out.clone()
+            drop_slots = {int(chans[i][0]) for i in dropped}
+            for n, s in enumerate(order):
+                if s in drop_slots:
+                    out[:, k * n: k * (n + 1)] = 0
         return out
     if kind == "ild":
         c = (spec - part) / (spec + part + EPS)
