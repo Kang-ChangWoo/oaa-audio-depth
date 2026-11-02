@@ -226,9 +226,9 @@ def main():
         _nfft, _win, _hop = (int(x) for x in a.stft_override.split("/"))
         os.environ["STFT_NFFT"], os.environ["STFT_WIN"], os.environ["STFT_HOP"] = str(_nfft), str(_win), str(_hop)
     _DM = get_data_module()      # load AFTER parsing/configuring the input recipe
-    if a.pair_feat == "ipd":
-        # phase planes come from the loader (data module EMIT_IPD); data_gibson only (2026-11-01)
-        assert hasattr(_DM, "EMIT_IPD"), f"--pair-feat ipd: {_DM.__name__} has no EMIT_IPD (ipd loader)"
+    if pairfeat.needs_ipd(a.pair_feat):          # ipd (2026-11-01) and ildipd (2026-11-02)
+        # phase planes come from the loader (data module EMIT_IPD): data_gibson, data_0422 (not data_mp3d)
+        assert hasattr(_DM, "EMIT_IPD"), f"--pair-feat {a.pair_feat}: {_DM.__name__} has no EMIT_IPD (ipd loader)"
         _DM.EMIT_IPD = True
         a.ipd_scale = float(_DM.IPD_SCALE)        # stamped into the manifest args; absent for every other run
     loader = _DM.loader

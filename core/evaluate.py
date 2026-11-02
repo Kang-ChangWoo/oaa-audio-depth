@@ -18,10 +18,10 @@ def evaluate(run_dir, DM, ckpt="best", device="cuda", max_depth=10.0, batch_size
     # "none" -> the forward below is statement-identical to the reference.
     pf = (ck["args"].get("pair_feat") or "none") if kind == "spec" else "none"
     pf_chans = list(DM._CH[dmode][:nch]) if pf != "none" else None
-    if pf == "ipd":                      # phase planes come from the loader (data module EMIT_IPD, data_gibson only)
-        assert hasattr(DM, "EMIT_IPD"), f"pair_feat ipd: {DM.__name__} has no EMIT_IPD (ipd loader)"
+    if pairfeat.needs_ipd(pf):           # ipd / ildipd: phase planes come from the loader (data module EMIT_IPD)
+        assert hasattr(DM, "EMIT_IPD"), f"pair_feat {pf}: {DM.__name__} has no EMIT_IPD (ipd loader)"
     if hasattr(DM, "EMIT_IPD"):
-        DM.EMIT_IPD = (pf == "ipd")
+        DM.EMIT_IPD = pairfeat.needs_ipd(pf)
     bs = batch_size or int(os.environ.get("EVAL_BS", "32"))   # lower (EVAL_BS=4) to fit a shared/contended GPU
     ld = DM.wave_loader("test", bs, False, 5, dmode) if kind == "wave" else DM.loader("test", bs, False, 5, dmode)
     acc = MetricAccumulator(device)

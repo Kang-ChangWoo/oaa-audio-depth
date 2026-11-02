@@ -112,6 +112,44 @@ def test_model_in_ch_2_forward_and_param_delta():
         m2(x, view_poses=[(0.0, -1.0), (0.0, 1.0)])                      # 2 planes expected, 1 given -> loud
 
 
+def _ipd_planes(N, B=2, H=8, W=16, seed=1):
+    g = torch.Generator().manual_seed(seed)
+    return torch.rand(B, N, 2, H, W, generator=g) * 2 - 1
+
+
+def test_ildipd_is_ild_plus_ipd_planes():
+    """ildipd (2026-11-02, E135 bin4): [mag, ILD contrast, cos, sgn*sin] = ild's planes + ipd's planes."""
+    assert pairfeat.in_ch("ipd") == 3 and pairfeat.in_ch("ildipd") == 4
+    assert pairfeat.needs_ipd("ipd") and pairfeat.needs_ipd("ildipd")
+    assert not any(pairfeat.needs_ipd(k) for k in pairfeat.KINDS if k not in ("ipd", "ildipd"))
+    assert not pairfeat.folds_views("ildipd")
+    x, ipd = _spec(8), _ipd_planes(8)
+    y = pairfeat.build(x, R8, "ildipd", ipd=ipd)
+    assert y.shape == (2, 32, 8, 16)
+    ild = pairfeat.build(x, R8, "ild")
+    ph = pairfeat.build(x, R8, "ipd", ipd=ipd)
+    assert torch.equal(y[:, 0::4], x)                                    # plane 0 = magnitude, untouched
+    assert torch.equal(y[:, 1::4], ild[:, 1::2])                         # plane 1 = ild's contrast, bit for bit
+    assert torch.equal(y[:, 2::4], ph[:, 1::3]) and torch.equal(y[:, 3::4], ph[:, 2::3])   # planes 2,3 = ipd's
+    with pytest.raises(AssertionError):
+        pairfeat.build(x, R8, "ildipd")                                  # no loader planes -> loud
+    # singles (no partner) get three zero planes, their magnitude survives
+    z = pairfeat.build(x[:, :4], CB, "ildipd", ipd=ipd[:, :4])
+    assert torch.equal(z[:, 8], x[:, 2]) and float(z[:, 9:12].abs().sum()) == 0.0
+    assert torch.equal(z[:, 12], x[:, 3]) and float(z[:, 13:16].abs().sum()) == 0.0
+
+
+def test_ildipd_dropped_observation_leaves_no_leak():
+    x, ipd = _spec(8), _ipd_planes(8)
+    y = pairfeat.build(x, R8, "ildipd", dropped=[2], ipd=ipd)            # drop (slot 1, L); partner = 3
+    assert float(y[:, 8:12].abs().sum()) == 0.0                          # all four planes of obs 2
+    assert float(y[:, 13:16].abs().sum()) == 0.0                         # partner's three pair planes
+    assert torch.equal(y[:, 12], x[:, 3])                                # partner's magnitude kept
+    ref = pairfeat.build(x, R8, "ildipd", ipd=ipd)
+    keep = [k for k in range(32) if k not in (8, 9, 10, 11, 13, 14, 15)]
+    assert torch.equal(y[:, keep], ref[:, keep])                         # nothing else touched
+
+
 def test_ckpt_roundtrip_strict_load_via_core_ckpt_build():
     import data_0422 as DM
     from core.ckpt import build

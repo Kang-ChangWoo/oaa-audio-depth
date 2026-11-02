@@ -16,6 +16,10 @@ relation at FULL time-frequency resolution, as a second input plane per observat
             complex STFT, sgn = +1 for ear 0 (L) / -1 for ear 1 (R). Phase is not in the magnitude
             spec, so the loader computes the two planes (data module EMIT_IPD) and build() receives
             them as `ipd` (B, N, 2, H, W), already ear-signed and in `chans` order (2026-11-01).
+  ildipd    planes 2,3,4 = [ILD contrast c (as `ild`), cos IPD, sgn_ear*sin IPD (as `ipd`)]: level
+            AND phase, the E135 `bin4` cue set (2026-11-02). The ILD plane is this module's bounded
+            contrast c, NOT E135's scaled log10 ratio; the two phase planes are the loader's `ipd`
+            planes unchanged, so `ildipd` planes 3,4 == `ipd` planes 2,3 bit for bit.
   earmean   NO second plane; both ears of a pair are replaced by their mean (L+R)/2. An input
             ablation that removes every inter-ear difference while keeping the monaural content
             and the channel count (= the `ear_mean` perturbation of the 2026-10-27 diagnostic,
@@ -32,7 +36,7 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 """
 import torch
 
-KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd")
+KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd")
 EPS = 1e-6
 
 
@@ -43,12 +47,19 @@ def in_ch(kind):
         return 2
     if kind in ("stereoild", "ipd"):
         return 3
+    if kind == "ildipd":
+        return 4
     return 1
 
 
 def folds_views(kind):
     """True when build() collapses each (L,R) pair into ONE observation (nviews halves)."""
     return kind in ("stereo", "stereoild")
+
+
+def needs_ipd(kind):
+    """True when build() needs the loader's phase planes (data module EMIT_IPD must be switched on)."""
+    return kind in ("ipd", "ildipd")
 
 
 def partner_index(chans):
@@ -62,7 +73,8 @@ def partner_index(chans):
 def build(spec, chans, kind, dropped=None, ipd=None):
     """spec (B, N, H, W) magnitude spectrograms in `chans` order -> model input.
     none -> spec itself; earmean -> (B, N, H, W); ild / partner -> (B, 2N, H, W);
-    ipd -> (B, 3N, H, W) from the loader's `ipd` planes (B, N, 2, H, W)."""
+    ipd -> (B, 3N, H, W) from the loader's `ipd` planes (B, N, 2, H, W);
+    ildipd -> (B, 4N, H, W) = per observation [mag, ILD contrast, cos IPD, sgn*sin IPD]."""
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
     if kind == "none":
         return spec
@@ -120,6 +132,25 @@ def build(spec, chans, kind, dropped=None, ipd=None):
                 j = pidx[i]
                 if j >= 0:
                     out[:, 3 * j + 1: 3 * j + 3] = 0
+        return out
+    if kind == "ildipd":
+        # E135 bin4 (2026-11-02): [mag, ILD contrast, cos IPD, sgn*sin IPD]. The ILD plane is the
+        # `ild` branch's c verbatim and the phase planes are the `ipd` branch's verbatim; a channel
+        # without a partner gets three zero planes; a dropped observation loses all four planes and
+        # its partner loses its three pair planes (planes 1..3), the same rule as ild / ipd.
+        assert ipd is not None, "pair_feat ildipd needs the loader's `ipd` planes (data module EMIT_IPD)"
+        assert tuple(ipd.shape) == (B, N, 2, H, W), f"ipd planes {tuple(ipd.shape)} vs spec {tuple(spec.shape)}"
+        c = (spec - part) / (spec + part + EPS)
+        c = torch.where(has, c, torch.zeros_like(c))
+        ph = torch.where(has.unsqueeze(2), ipd, torch.zeros_like(ipd))
+        out = torch.cat([spec.unsqueeze(2), c.unsqueeze(2), ph], 2).reshape(B, 4 * N, H, W)
+        if dropped:
+            out = out.clone()
+            for i in dropped:
+                out[:, 4 * i: 4 * i + 4] = 0
+                j = pidx[i]
+                if j >= 0:
+                    out[:, 4 * j + 1: 4 * j + 4] = 0
         return out
     if kind == "ild":
         c = (spec - part) / (spec + part + EPS)
