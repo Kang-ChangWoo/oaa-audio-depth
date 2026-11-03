@@ -137,6 +137,43 @@ def _spec(scene, front, mode):
     return torch.cat([sp[o][e:e + 1] for o, e in chans], 0)
 
 
+# ---- --pair-feat ipd / ildipd (2026-11-04, ported from data_0422.py 2026-11-02 / data_gibson.py 2026-11-01):
+# interaural PHASE planes. The magnitude spec above discards phase, so these are computed from the waveform
+# with the SAME STFT and the SAME nearest resize, following E135 (cue_channels): dphi = angle(S_L * conj(S_R))
+# on the raw (257, T) STFT, planes cos(dphi)*IPD_SCALE and sin(dphi)*IPD_SCALE, resized AFTER cos/sin. Per
+# channel the sin plane is ear-signed (+ for L, - for R) so each observation sees phi_own - phi_other.
+# IPD_SCALE = E135's measured Replica-train value (std(mag)/std(cos IPD) = 0.6476), reused as-is via the same
+# env knob E135_SCALE_IPD -- NOT re-measured on MP3D (the same choice data_gibson made). EMIT_IPD defaults to
+# False: the trainer / evaluator set it for pair_feat in (ipd, ildipd); every other path returns the plain
+# batch dict, unchanged. Phase planes are never cached (MP3D_SPEC_CACHE holds magnitudes only).
+IPD_SCALE = float(os.environ.get("E135_SCALE_IPD", "0.6476"))
+EMIT_IPD = False
+
+
+def _stft_ipd1(wav2):
+    S = torch.stft(wav2, n_fft=N_FFT, hop_length=HOP, win_length=WIN, window=_HANN,
+                   center=True, return_complex=True)                      # (2, 257, T) complex, L then R
+    dphi = torch.angle(S[0] * torch.conj(S[1]))
+    x = torch.stack([torch.cos(dphi), torch.sin(dphi)]) * IPD_SCALE        # (2, 257, T) [cos, sin], L-relative
+    return F.interpolate(x.unsqueeze(0), size=(H, W), mode="nearest")[0]   # same resize as _stft_mag
+
+
+def _ipd1(scene, step):
+    return _stft_ipd1(_load_wave1(f"{ROOT}/{scene}/audio_wav/audio_{step:03d}.wav"))
+
+
+_IPD_SIGN = {0: torch.tensor([1.0, 1.0]).view(2, 1, 1), 1: torch.tensor([1.0, -1.0]).view(2, 1, 1)}
+
+
+def _ipd(scene, front, mode):
+    """(N, 2, H, W): per channel of _CH[mode] the planes [cos, sgn_ear * sin] of the pair at that slot."""
+    chans = _CH[mode]
+    offs = sorted({o for o, _ in chans})
+    step = dict(zip(offs, _group_steps(front, offs)))
+    ip = {o: _ipd1(scene, step[o]) for o in offs}
+    return torch.stack([ip[o] * _IPD_SIGN[e] for o, e in chans], 0)
+
+
 def _load_depth(scene, front):
     # radial ERP depth (matches OAA's radial output; erp_depth/ is not populated for all scenes)
     d = np.load(f"{ROOT}/{scene}/erp_depth_radial/erp_depth_{front:03d}.npy").astype(np.float32)
@@ -162,7 +199,10 @@ class RotSet(_Base):
     def __getitem__(self, i):
         sc, f = self.samples[i]
         depth, mask = _load_depth(sc, f)
-        return {"spec": _spec(sc, f, self.mode), "depth": depth, "mask": mask, "idx": i}
+        d = {"spec": _spec(sc, f, self.mode), "depth": depth, "mask": mask, "idx": i}
+        if EMIT_IPD:                      # --pair-feat ipd / ildipd only; default False -> the dict above, unchanged
+            d["ipd"] = _ipd(sc, f, self.mode)
+        return d
 
 
 class WaveSet(_Base):
