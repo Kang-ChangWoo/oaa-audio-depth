@@ -150,6 +150,51 @@ def test_ildipd_dropped_observation_leaves_no_leak():
     assert torch.equal(y[:, keep], ref[:, keep])                         # nothing else touched
 
 
+def test_ildmin_is_the_unsigned_ild_and_symmetric_within_the_pair():
+    """ildmin (2026-11-03): plane 2 = min/max level ratio in [0,1], same value for both ears, in_ch 2."""
+    assert pairfeat.in_ch("ildmin") == 2 and not pairfeat.needs_ipd("ildmin") and not pairfeat.folds_views("ildmin")
+    x = _spec(8)
+    y = pairfeat.build(x, R8, "ildmin")
+    assert y.shape == (2, 16, 8, 16)
+    mag, c = y[:, 0::2], y[:, 1::2]
+    assert torch.equal(mag, x)                                           # plane 1 = magnitude, untouched
+    for i, j in enumerate(pairfeat.partner_index(R8)):
+        assert torch.equal(c[:, i], c[:, j])                             # both ears receive the SAME plane
+    assert float(c.min()) >= 0.0 and float(c.max()) <= 1.0
+    # min/max == exp(-|ln(own/partner)|) == (1 - |c_ild|) / (1 + |c_ild|): only the sign of `ild` is gone
+    ild = pairfeat.build(x, R8, "ild")[:, 1::2]
+    assert torch.allclose(c, (1 - ild.abs()) / (1 + ild.abs()), atol=1e-4)
+    assert torch.allclose(c[:, 0], torch.exp(-torch.log(x[:, 0] / x[:, 1]).abs()), atol=1e-4)
+    # a channel without a partner gets a zero plane, exactly like ild
+    z = pairfeat.build(x[:, :4], CB, "ildmin")
+    assert torch.equal(z[:, 5], torch.zeros_like(x[:, 0])) and torch.equal(z[:, 7], torch.zeros_like(x[:, 0]))
+    assert torch.equal(z[:, 1], z[:, 3]) and torch.equal(z[:, 0], x[:, 0]) and torch.equal(z[:, 2], x[:, 1])
+
+
+def test_ildmin_dropped_observation_leaves_no_leak():
+    x = _spec(8)
+    y = pairfeat.build(x, R8, "ildmin", dropped=[2])                     # drop (slot 1, L); partner = 3
+    assert torch.equal(y[:, 4], torch.zeros_like(x[:, 0])) and torch.equal(y[:, 5], torch.zeros_like(x[:, 0]))
+    assert torch.equal(y[:, 7], torch.zeros_like(x[:, 0]))               # partner's pair plane zeroed
+    assert torch.equal(y[:, 6], x[:, 3])                                 # partner's magnitude kept
+    ref = pairfeat.build(x, R8, "ildmin")
+    keep = [k for k in range(16) if k not in (4, 5, 7)]
+    assert torch.equal(y[:, keep], ref[:, keep])                         # nothing else touched
+
+
+def test_ildmin_model_in_ch_2_forward():
+    SMALL = dict(C=64, lh=4, lw=8, enc_res=(16, 32))
+    torch.manual_seed(0)
+    m = OAAv2Depth(nviews=2, in_ch=pairfeat.in_ch("ildmin"), **SMALL)
+    x = _spec(2, B=1, H=16, W=32)
+    y = pairfeat.build(x, R2, "ildmin")
+    assert y.shape == (1, 4, 16, 32)
+    m.eval()
+    with torch.no_grad():
+        out = m(y, view_poses=[(0.0, -1.0), (0.0, 1.0)])
+    assert out.shape[:2] == (1, 1) and torch.isfinite(out).all()
+
+
 def test_ckpt_roundtrip_strict_load_via_core_ckpt_build():
     import data_0422 as DM
     from core.ckpt import build

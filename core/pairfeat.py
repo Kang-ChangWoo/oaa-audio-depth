@@ -9,6 +9,15 @@ relation at FULL time-frequency resolution, as a second input plane per observat
             in [-1, 1], antisymmetric within the pair (c_L = -c_R), a monotone function of the
             ILD in dB: c = tanh(ln(|own|/|partner|) / 2) = tanh(ILD_dB * ln(10) / 40). Bounded and
             EPS-insensitive where a log-ratio would blow up on silent bins.
+  ildmin    plane 2 = UNSIGNED pair level ratio min(|own|, |partner|) / (max(|own|, |partner|) + EPS)
+            in [0, 1], SYMMETRIC within the pair (both ears receive the SAME plane). The sign-free
+            counterpart of `ild`: min/max = exp(-|ln(|own|/|partner|)|) = (1 - |c|) / (1 + |c|), so
+            exactly one thing changes against `ild` -- the sign (2026-11-03). Motivation: the
+            direct-sound ILD is a constant +-18.45 dB per heading on Gibson, Replica AND MP3D
+            (heading-signature probe 2026-11-03), so the sign of the `ild` plane is a free pose /
+            ear label; `ildmin` keeps the magnitude of the level difference and drops that label.
+            NOT the raw min(|L|, |R|): that is a second magnitude spectrogram and nearly duplicates
+            plane 1; only the ratio carries new information.
   partner   plane 2 = the partner ear's raw magnitude (pair stacking: the access a channel-stacked
             CNN has, without the ILD inductive bias)
   ipd       planes 2,3 = interaural PHASE, E135 definition (e135/data_0422_bin.py cue_channels):
@@ -36,14 +45,14 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 """
 import torch
 
-KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd")
+KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd", "ildmin")
 EPS = 1e-6
 
 
 def in_ch(kind):
     """Input planes per observation the model must be built with."""
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
-    if kind in ("ild", "partner", "stereo"):
+    if kind in ("ild", "partner", "stereo", "ildmin"):
         return 2
     if kind in ("stereoild", "ipd"):
         return 3
@@ -72,7 +81,7 @@ def partner_index(chans):
 
 def build(spec, chans, kind, dropped=None, ipd=None):
     """spec (B, N, H, W) magnitude spectrograms in `chans` order -> model input.
-    none -> spec itself; earmean -> (B, N, H, W); ild / partner -> (B, 2N, H, W);
+    none -> spec itself; earmean -> (B, N, H, W); ild / partner / ildmin -> (B, 2N, H, W);
     ipd -> (B, 3N, H, W) from the loader's `ipd` planes (B, N, 2, H, W);
     ildipd -> (B, 4N, H, W) = per observation [mag, ILD contrast, cos IPD, sgn*sin IPD]."""
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
@@ -154,6 +163,10 @@ def build(spec, chans, kind, dropped=None, ipd=None):
         return out
     if kind == "ild":
         c = (spec - part) / (spec + part + EPS)
+    elif kind == "ildmin":
+        # unsigned level ratio in [0, 1], identical for both ears of a pair (2026-11-03); everything
+        # below (no-partner zeroing, stacking, `dropped`) is the `ild` path unchanged
+        c = torch.minimum(spec, part) / (torch.maximum(spec, part) + EPS)
     else:                                                                 # partner
         c = part
     c = torch.where(has, c, torch.zeros_like(c))
