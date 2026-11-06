@@ -45,14 +45,16 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 """
 import torch
 
-KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd", "ildmin")
+KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd", "ildmin",
+         "itd")
 EPS = 1e-6
+ITD_MAX = 16.0          # samples; lag half-width of the `itd` GCC-PHAT search
 
 
 def in_ch(kind):
     """Input planes per observation the model must be built with."""
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
-    if kind in ("ild", "partner", "stereo", "ildmin"):
+    if kind in ("ild", "partner", "stereo", "ildmin", "itd"):
         return 2
     if kind in ("stereoild", "ipd"):
         return 3
@@ -68,7 +70,7 @@ def folds_views(kind):
 
 def needs_ipd(kind):
     """True when build() needs the loader's phase planes (data module EMIT_IPD must be switched on)."""
-    return kind in ("ipd", "ildipd")
+    return kind in ("ipd", "ildipd", "itd")
 
 
 def partner_index(chans):
@@ -126,6 +128,40 @@ def build(spec, chans, kind, dropped=None, ipd=None):
             for n, s in enumerate(order):
                 if s in drop_slots:
                     out[:, k * n: k * (n + 1)] = 0
+        return out
+    if kind == "itd":
+        # One broadband delay per observation instead of the full per-bin phase (2026-11-06).
+        # `ipd` gives the model phase at every frequency bin; `itd` collapses that to a SINGLE
+        # GCC-PHAT delay and broadcasts it as a constant plane, so the only thing that changes
+        # against `ipd` is how much of the phase survives. Measured earlier on Gibson: the best
+        # single delay explains 0.42 of the phase, so this arm is the lossy projection on purpose.
+        #
+        # The loader hands us (cos phi, sgn_ear * sin phi) per bin. GCC-PHAT over a fixed lag grid:
+        #   R(tau) = sum_h cos(phi_h + omega_h * tau),  omega_h = pi * h / (H - 1)
+        # with the unit-magnitude cross spectrum averaged over time frames first (stationary delay).
+        # Lag grid is +-ITD_MAX samples at quarter-sample steps; ITD_MAX 16 covers the measured
+        # +-7-sample interaural range with margin. Output plane = tau_hat / ITD_MAX in [-1, 1].
+        assert ipd is not None, "pair_feat itd needs the loader's `ipd` planes (data module EMIT_IPD)"
+        assert tuple(ipd.shape) == (B, N, 2, H, W), f"ipd planes {tuple(ipd.shape)} vs spec {tuple(spec.shape)}"
+        cos_p = ipd[:, :, 0].mean(-1)                                     # (B, N, H) time-averaged
+        sin_p = ipd[:, :, 1].mean(-1)
+        omega = torch.linspace(0.0, torch.pi, H, device=spec.device, dtype=spec.dtype)
+        lags = torch.arange(-4 * ITD_MAX, 4 * ITD_MAX + 1, device=spec.device,
+                            dtype=spec.dtype) * 0.25                      # (L,) quarter samples
+        wt = omega.unsqueeze(1) * lags.unsqueeze(0)                       # (H, L)
+        # sum_h cos(phi_h + omega_h tau) = sum_h [cos phi_h cos(wt) - sin phi_h sin(wt)]
+        r = cos_p @ torch.cos(wt) - sin_p @ torch.sin(wt)                 # (B, N, L)
+        tau = lags[r.argmax(-1)] / ITD_MAX                                # (B, N) in [-1, 1]
+        c = tau.view(B, N, 1, 1).expand(B, N, H, W)
+        c = torch.where(has, c, torch.zeros_like(c))
+        out = torch.stack([spec, c], 2).reshape(B, 2 * N, H, W)
+        if dropped:
+            out = out.clone()
+            for i in dropped:
+                out[:, 2 * i: 2 * i + 2] = 0
+                j = pidx[i]
+                if j >= 0:
+                    out[:, 2 * j + 1] = 0
         return out
     if kind == "ipd":
         # A channel without a partner gets zero planes, exactly like ild; a dropped observation
