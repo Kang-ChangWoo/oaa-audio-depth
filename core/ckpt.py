@@ -45,10 +45,7 @@ def build(args, DM):
     # pose list the same way. The loader still has to hand over all `nv` channels -- the fold happens
     # after the slice in core/evaluate.py -- so `nv` (returned as nch) stays full and only the model
     # and the pose list halve. Without this a stereo cell fails strict load and eval drops the row.
-    _fold = pairfeat.folds_views(args.get("pair_feat") or "none")
-    if _fold:
-        assert nv % 2 == 0, f"stereo checkpoint with odd nviews={nv}"
-    _mviews = nv // 2 if _fold else nv
+    _mviews = pairfeat.fold_to(args.get("pair_feat") or "none", nv)   # stackall -> 1, stereo -> nv//2
     if args.get("data_module") and args["data_module"] != DM.__name__:        # checkpoints that recorded their dataset
         raise RuntimeError(f"checkpoint was trained with DATA_MODULE={args['data_module']} but {DM.__name__} is loaded")
     for key, env, dflt in (("stft_hop", "HOP", 160), ("stft_win", "WIN", 400), ("stft_nfft", "N_FFT", 512),
@@ -138,7 +135,7 @@ def build(args, DM):
                    # checkpoint -> "none" -> in_ch=1, the reference. Without this line an ild /
                    # partner cell (stem conv with 2 input planes) fails strict load and eval.py
                    # drops the row with a bare `[skip <run>]`. core/evaluate.py builds the planes.
-                   in_ch=pairfeat.in_ch(args.get("pair_feat") or "none"))
+                   in_ch=pairfeat.in_ch(args.get("pair_feat") or "none", nv))
     poses = poses_for(dmode)
     if args.get("yaw_flip") and poses:
         poses = [(-y, e) for (y, e) in poses]

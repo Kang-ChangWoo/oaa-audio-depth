@@ -292,12 +292,10 @@ def main():
     # --pair-feat stereo/stereoild (2026-10-31): build() folds each (L,R) pair into ONE observation,
     # so the model must be built with HALF the observations and half the pose list. 2-channel only:
     # both ears share a heading, so the surviving pose is the pair's pose and nothing is invented.
-    _mviews = a.nviews
-    if pairfeat.folds_views(a.pair_feat):
-        assert a.nviews % 2 == 0, "stereo needs an even nviews"
-        _mviews = a.nviews // 2
-        if vp is not None:
-            vp = list(vp)[::2][:_mviews]
+    # stackall (2026-11-06) folds EVERY channel into one observation, so the factor is not 2.
+    _mviews = pairfeat.fold_to(a.pair_feat, a.nviews)
+    if _mviews != a.nviews and vp is not None:
+        vp = list(vp)[::2][:_mviews]        # stereo: one pose per pair; stackall: the first pose
     model = OAAv2Depth(C=a.dim, nviews=_mviews, rounds=a.rounds, lh=a.lift_h, lw=a.lift_w,
                        stem_stride1=a.stem_stride1, max_depth=a.max_depth,
                        no_pose_emb=a.no_pose_emb, no_ray_emb=a.no_ray_emb, no_geo_bias=a.no_geo_bias,
@@ -316,7 +314,7 @@ def main():
                        cross_reread=a.cross_reread,
                        geo_key_coupling=a.geo_key_coupling,
                        enc_time_stride1=a.enc_time_stride1,
-                       in_ch=pairfeat.in_ch(a.pair_feat)).to(device)
+                       in_ch=pairfeat.in_ch(a.pair_feat, a.nviews)).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
         # readback of the determinism state actually in force (both modes print it, so an OFF run
@@ -447,7 +445,7 @@ def main():
                 # pair units -- otherwise k=6 of 8 ear channels can cover all 4 folded
                 # observations and zero the whole input. The non-folding path is unchanged
                 # (same RNG calls in the same order), so ctrl/ild stay bit-identical.
-                _fold = pairfeat.folds_views(a.pair_feat)
+                _fold = pairfeat.folds_pairs(a.pair_feat)      # stackall drops in channel units
                 _nobs = spec_in.shape[1] // 2 if _fold else spec_in.shape[1]
                 _pool = [x for x in range(min(a.vdrop_kstep, 2), a.vdrop_kmax + 1, a.vdrop_kstep)
                          if x < _nobs] or [1]

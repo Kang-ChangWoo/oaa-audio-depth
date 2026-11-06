@@ -46,14 +46,20 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 import torch
 
 KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd", "ildmin",
-         "itd")
+         "itd", "stackall")
 EPS = 1e-6
 ITD_MAX = 16.0          # samples; lag half-width of the `itd` GCC-PHAT search
 
 
-def in_ch(kind):
-    """Input planes per observation the model must be built with."""
+def in_ch(kind, nviews=None):
+    """Input planes per observation the model must be built with.
+
+    `stackall` needs nviews: every loader channel becomes one plane of the single observation.
+    """
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
+    if kind == "stackall":
+        assert nviews, "pair_feat stackall needs nviews to size the stacked observation"
+        return int(nviews)
     if kind in ("ild", "partner", "stereo", "ildmin", "itd"):
         return 2
     if kind in ("stereoild", "ipd"):
@@ -64,8 +70,25 @@ def in_ch(kind):
 
 
 def folds_views(kind):
-    """True when build() collapses each (L,R) pair into ONE observation (nviews halves)."""
+    """True when the model sees FEWER observations than the loader hands over."""
+    return kind in ("stereo", "stereoild", "stackall")
+
+
+def folds_pairs(kind):
+    """True for the (L,R) PAIR fold only -- the modes whose observation unit is two channels.
+    `stackall` is excluded on purpose: there one CHANNEL is still one observation (one plane),
+    so --subset-aug keeps counting and dropping in channel units, exactly like ctrl."""
     return kind in ("stereo", "stereoild")
+
+
+def fold_to(kind, nviews):
+    """Observation count the model must be built with for `nviews` loader channels."""
+    if kind == "stackall":
+        return 1
+    if folds_pairs(kind):
+        assert nviews % 2 == 0, f"{kind} needs an even nviews, got {nviews}"
+        return nviews // 2
+    return nviews
 
 
 def needs_ipd(kind):
@@ -97,6 +120,20 @@ def build(spec, chans, kind, dropped=None, ipd=None):
     part = spec.index_select(1, gather)                                   # (B, N, H, W) partner (or self)
     if kind == "earmean":
         out = torch.where(has, 0.5 * (spec + part), spec)
+        if dropped:
+            out = out.clone()
+            out[:, list(dropped)] = 0
+        return out
+    if kind == "stackall":
+        # Architecture ablation, Changwoo 2026-11-06. Hand the encoder ALL channels as the planes
+        # of ONE observation instead of one posed observation per channel. The TENSOR IS UNCHANGED:
+        # the model is built with nviews=1 and in_ch=N, so `spec.view(B, 1, N, H, W)` reads exactly
+        # the same bytes as a single stacked token. This therefore ablates the TOKENISATION only --
+        # the per-view pose/ray embedding and the cross-view attention -- and nothing about the
+        # input content. At 8 channels the four headings collapse into one token and the surviving
+        # pose is the first channel's (0 deg, L): unlike the 2-channel stereo fold a pose IS being
+        # invented here, which is the thing under test.
+        out = spec
         if dropped:
             out = out.clone()
             out[:, list(dropped)] = 0
