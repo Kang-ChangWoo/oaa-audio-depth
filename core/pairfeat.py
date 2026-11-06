@@ -46,7 +46,7 @@ in through its partner's contrast. The planes are always built from the CLEAN sp
 import torch
 
 KINDS = ("none", "ild", "partner", "earmean", "stereo", "stereoild", "ipd", "ildipd", "ildmin",
-         "itd", "stackall")
+         "itd", "stackall", "stackroll")
 EPS = 1e-6
 ITD_MAX = 16.0          # samples; lag half-width of the `itd` GCC-PHAT search
 
@@ -57,8 +57,8 @@ def in_ch(kind, nviews=None):
     `stackall` needs nviews: every loader channel becomes one plane of the single observation.
     """
     assert kind in KINDS, f"pair_feat {kind} not in {KINDS}"
-    if kind == "stackall":
-        assert nviews, "pair_feat stackall needs nviews to size the stacked observation"
+    if kind in ("stackall", "stackroll"):
+        assert nviews, f"pair_feat {kind} needs nviews to size the stacked planes"
         return int(nviews)
     if kind in ("ild", "partner", "stereo", "ildmin", "itd"):
         return 2
@@ -123,6 +123,26 @@ def build(spec, chans, kind, dropped=None, ipd=None):
         if dropped:
             out = out.clone()
             out[:, list(dropped)] = 0
+        return out
+    if kind == "stackroll":
+        # Changwoo's hybrid, 2026-11-06. Keep nviews posed groups and nviews*M tokens, but let
+        # every group see EVERY channel so the channels mix in the stem instead of only meeting
+        # at the inter-observation attention. Group g is the channel list rolled so that channel g
+        # comes first, which is what tells the groups apart while each one stays complete; the
+        # encoder weights are shared across groups exactly as in the reference.
+        # Output (B, N*N, H, W) -> the model reads it as nviews groups of in_ch=N planes, so the
+        # pose list and the checkpoint contract are untouched (no fold).
+        g = torch.stack([torch.roll(spec, -i, dims=1) for i in range(N)], 1)   # (B, N, N, H, W)
+        out = g.reshape(B, N * N, H, W)
+        if dropped:
+            # a dropped observation must vanish from EVERY group: in group i it sits at plane
+            # (c - i) mod N. Zeroing by original channel keeps --subset-aug's meaning identical
+            # to the control, where the whole observation disappears.
+            out = out.clone().view(B, N, N, H, W)
+            for c in dropped:
+                for i in range(N):
+                    out[:, i, (int(c) - i) % N] = 0
+            out = out.reshape(B, N * N, H, W)
         return out
     if kind == "stackall":
         # Architecture ablation, Changwoo 2026-11-06. Hand the encoder ALL channels as the planes
