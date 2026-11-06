@@ -46,6 +46,7 @@ def build(args, DM):
     # after the slice in core/evaluate.py -- so `nv` (returned as nch) stays full and only the model
     # and the pose list halve. Without this a stereo cell fails strict load and eval drops the row.
     _mviews = pairfeat.fold_to(args.get("pair_feat") or "none", nv)   # stackall -> 1, stereo -> nv//2
+    _fold = pairfeat.folds_pairs(args.get("pair_feat") or "none")     # (L,R) pair fold -> one pose per pair
     if args.get("data_module") and args["data_module"] != DM.__name__:        # checkpoints that recorded their dataset
         raise RuntimeError(f"checkpoint was trained with DATA_MODULE={args['data_module']} but {DM.__name__} is loaded")
     for key, env, dflt in (("stft_hop", "HOP", 160), ("stft_win", "WIN", 400), ("stft_nfft", "N_FFT", 512),
@@ -79,6 +80,9 @@ def build(args, DM):
                    no_pose_emb=args.get("no_pose_emb", False) or False, no_ray_emb=args.get("no_ray_emb", False) or False,
                    no_geo_bias=args.get("no_geo_bias", False) or False, no_tf_pe=args.get("no_tf_pe", False) or False,
                    no_cross=args.get("no_cross", False) or False,
+                   # weight-sharing ablation (2026-11-06); absent in every earlier checkpoint and the
+                   # default is the weight-shared reference encoder, so old args rebuild unchanged
+                   unshared_enc=args.get("unshared_enc", False) or False,
                    # attention/fusion variants; absent in every pre-2026-10-13 checkpoint, and the
                    # defaults below are exactly the reference model, so old args rebuild unchanged
                    qk_norm=args.get("qk_norm", False) or False, ray_gate=args.get("ray_gate", False) or False,

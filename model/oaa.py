@@ -13,7 +13,9 @@ Coordinate convention:
 Observation pose list per input mode (yaw, ear): ear -1 = left, +1 = right.
 
 Ablation switches (construction-time, default off => reference model):
-  no_tf_pe, no_pose_emb, no_ray_emb, no_geo_bias, no_cross.
+  no_tf_pe, no_pose_emb, no_ray_emb, no_geo_bias, no_cross, unshared_enc.
+  unshared_enc drops the weight sharing stated above: every observation gets its own encoder of
+  the same architecture, everything else (token grid, pose codes, fusion, input tensor) unchanged.
 
 Attention/fusion variants (construction-time, default off => reference model, and the extra
 parameters are only *created* when the switch is on, so an original checkpoint still loads with
@@ -1098,7 +1100,7 @@ class OAAv2Depth(nn.Module):
                  geo_value_film=False, film_lse=False, ffn_swiglu="off",
                  pose_reinject=False, geo_ray_gain=False, value_moments=False,
                  tof_value_code=False, tof_tau_inject=False, cross_reread=False,
-                 geo_key_coupling=False, enc_time_stride1=False):
+                 geo_key_coupling=False, enc_time_stride1=False, unshared_enc=False):
         super().__init__()
         assert ffn_swiglu in SWIGLU_MODES, f"ffn_swiglu {ffn_swiglu} not in {SWIGLU_MODES}"
         if value_moments and pose_reinject:
@@ -1150,6 +1152,17 @@ class OAAv2Depth(nn.Module):
         self.enc_time_stride1 = bool(enc_time_stride1)
         self.enc = ViewEncoder(C, in_ch=in_ch, norm=norm, lh=lh, lw=lw, enc_res=enc_res, stem_stride1=stem_stride1,
                                time_stride1_stages=(2 if enc_time_stride1 else 0))
+        # unshared_enc (2026-11-06): drop the weight sharing ACROSS observations. Each of the nviews
+        # observations gets its own encoder of the SAME architecture (so this is a weight-sharing
+        # ablation, not an architecture change). Observation 0 keeps the `enc.*` keys, and the extra
+        # encoders are only created when the switch is on, so a reference checkpoint still loads with
+        # strict=True while the switch is off. Token grid, pose codes, inter-observation attention and
+        # the input tensor are untouched; the only difference is whose weights encode which observation.
+        self.unshared_enc = bool(unshared_enc)
+        self.enc_extra = nn.ModuleList(
+            [ViewEncoder(C, in_ch=in_ch, norm=norm, lh=lh, lw=lw, enc_res=enc_res, stem_stride1=stem_stride1,
+                         time_stride1_stages=(2 if enc_time_stride1 else 0))
+             for _ in range(nviews - 1)]) if unshared_enc else None
         self.pose_emb = nn.Sequential(nn.Linear(3, C), nn.GELU(), nn.Linear(C, C))       # MLP_pose([sin, cos, ear])
         self.tf_pe = nn.Parameter(torch.zeros(1, self.M, C))                              # learnable TF PE
         self.q = nn.Parameter(torch.randn(1, self.M, C) * 0.02)                           # learnable panoramic queries
@@ -1279,6 +1292,10 @@ class OAAv2Depth(nn.Module):
                                  device=dev, dtype=self.pose_emb[0].weight.dtype)
         return pose_feat, [tuple(p) for p in vp]
 
+    def enc_for(self, i):
+        """The encoder that owns observation i: `enc` for i=0, `enc_extra[i-1]` with --unshared-enc."""
+        return self.enc if (i == 0 or self.enc_extra is None) else self.enc_extra[i - 1]
+
     def _encode(self, spec, view_pose=None):
         """Batched per-observation encode (NOT channel-stacked) + TF PE + pose emb.
         -> tokens (B,nv,M,C), poses, fine tokens (B,nv,4M,fine_ch)."""
@@ -1286,12 +1303,17 @@ class OAAv2Depth(nn.Module):
         assert spec.size(1) == self.nv * self.in_ch, f"expected {self.nv * self.in_ch}ch, got {spec.size(1)}"
         B = spec.size(0); dev = spec.device; H, W = spec.shape[-2:]
         pose_feat, poses = self._pose_tensors(dev, view_pose)
-        v = spec.view(B, self.nv, self.in_ch, H, W).reshape(B * self.nv, self.in_ch, H, W)
-        enc_t, fine_t = self.enc(v)
-        t = enc_t.reshape(B, self.nv, self.M, self.C)
+        v = spec.view(B, self.nv, self.in_ch, H, W)
+        if self.enc_extra is None:                                   # weight-shared: one batched call
+            enc_t, fine_t = self.enc(v.reshape(B * self.nv, self.in_ch, H, W))
+            t = enc_t.reshape(B, self.nv, self.M, self.C)
+            fine = fine_t.reshape(B, self.nv, 4 * self.M, self.enc.fine_ch)
+        else:                                                        # --unshared-enc: observation i -> encoder i
+            outs = [self.enc_for(i)(v[:, i]) for i in range(self.nv)]
+            t = torch.stack([o[0] for o in outs], 1)
+            fine = torch.stack([o[1] for o in outs], 1)
         if not self.no_tf_pe:
             t = t + self.tf_pe.unsqueeze(1)
-        fine = fine_t.reshape(B, self.nv, 4 * self.M, self.enc.fine_ch)
         if not self.no_pose_emb:
             t = t + self.pose_emb(pose_feat).view(1, self.nv, 1, self.C)
         return t, poses, pose_feat, fine

@@ -78,6 +78,7 @@ def make_parser():
     p.add_argument("--lift-h", type=int, default=16)    # panoramic query grid (elevation x azimuth); must divide 256/512
     p.add_argument("--lift-w", type=int, default=32)
     p.add_argument("--stem-stride1", action="store_true")   # stride-1 stem on the native input (no 2x upsample)
+    p.add_argument("--unshared-enc", action="store_true")  # per-observation encoders: same architecture, NO weight sharing
     p.add_argument("--data-mode", default="")   # loader channel mode override (default derived from nviews)
     p.add_argument("--accum", type=int, default=1)   # grad-accumulation steps: effective batch = batch-size*accum
     p.add_argument("--lr", type=float, default=5e-4)
@@ -314,6 +315,7 @@ def main():
                        cross_reread=a.cross_reread,
                        geo_key_coupling=a.geo_key_coupling,
                        enc_time_stride1=a.enc_time_stride1,
+                       unshared_enc=a.unshared_enc,
                        in_ch=pairfeat.in_ch(a.pair_feat, a.nviews)).to(device)
     if is_main:
         print(f"[cfg] {vars(a)} params={sum(x.numel() for x in model.parameters())/1e6:.2f}M ddp_world={world}", flush=True)
