@@ -199,6 +199,28 @@ def _load_depth(scene, front):
     return (t / MAX_DEPTH).clamp(0, 1), valid.float()
 
 
+# ---- reference-only ERP RGB path (2026-11-10). The 2026-11-10 render added
+# $GIBSON_ROOT/<scene>/erp_rgb/erp_rgb_LLL_YYY.png (uint8 512x1024, same stem as erp_depth_*) for the
+# 9 test scenes only; the other 483 Gibson scenes, Replica and MP3D have no RGB. EMIT_RGB_PATH=1 makes
+# every sample dict carry "rgb_path": the PNG path STRING of the sample's front (= depth target) pose,
+# "" when the file is absent. The image is never decoded here and is never a model input -- it is a
+# side channel for visualisation/inspection. Default off: with the env var unset the dicts are
+# byte-identical to before. Strings collate to a list[str] under the default collate_fn.
+EMIT_RGB_PATH = os.environ.get("EMIT_RGB_PATH", "0") == "1"
+
+
+def _rgb_path(scene, front):
+    p = f"{ROOT}/{scene}/erp_rgb/erp_rgb_{_stem(front)}.png"
+    return p if os.path.exists(p) else ""
+
+
+def rgb_coverage(split, mode="r2"):
+    """(n_samples, n_missing) of rgb paths for a split, by stat only (no audio/depth load). Use this to
+    count empties: DataLoader workers each hold their own copy of the module, so no shared counter."""
+    samples = _index(split)
+    return len(samples), sum(1 for sc, f in samples if _rgb_path(sc, f) == "")
+
+
 class _Base(Dataset):
     def __init__(self, split, mode="r2"):
         assert mode in _CH, mode
@@ -215,6 +237,8 @@ class RotSet(_Base):
         d = {"spec": _spec(sc, f, self.mode), "depth": depth, "mask": mask, "idx": i}
         if EMIT_IPD:                      # --pair-feat ipd only; default False -> the dict above, unchanged
             d["ipd"] = _ipd(sc, f, self.mode)
+        if EMIT_RGB_PATH:                 # reference only (path string, never decoded); default False
+            d["rgb_path"] = _rgb_path(sc, f)
         return d
 
 
@@ -222,7 +246,10 @@ class WaveSet(_Base):
     def __getitem__(self, i):
         sc, f = self.samples[i]
         depth, mask = _load_depth(sc, f)
-        return {"wave": _load_wave(sc, f, self.mode), "depth": depth, "mask": mask}
+        d = {"wave": _load_wave(sc, f, self.mode), "depth": depth, "mask": mask}
+        if EMIT_RGB_PATH:
+            d["rgb_path"] = _rgb_path(sc, f)
+        return d
 
 
 class SpecWaveSet(_Base):
@@ -238,7 +265,10 @@ class SpecWaveSet(_Base):
         wave_std = _load_wave(sc, f, self.mode)
         wave = wave_std if self.wave_window == WINDOW else _load_wave(sc, f, self.mode, self.wave_window)
         depth, mask = _load_depth(sc, f)
-        return {"spec": _stft_mag(wave_std), "wave": wave, "depth": depth, "mask": mask, "idx": i}
+        d = {"spec": _stft_mag(wave_std), "wave": wave, "depth": depth, "mask": mask, "idx": i}
+        if EMIT_RGB_PATH:
+            d["rgb_path"] = _rgb_path(sc, f)
+        return d
 
 
 def loader(split, batch_size, shuffle, num_workers, mode="r2", *_a, **_k):
